@@ -22,7 +22,9 @@ concurrency:
 
 env:
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "20"
+  # Vitest 5 requires Node ^22.12.0 || ^24.0.0, and its undici dependency requires
+  # >=22.19.0. Node 20 fails to start the test worker, so the suite never runs.
+  NODE_VERSION: "22"
 
 jobs:
   backend:
@@ -168,9 +170,13 @@ jobs:
           fetch-depth: 0
 
       - name: Scan the full history for committed secrets
+        # The default ruleset runs unmodified. `.gitleaks.toml` allows only the specific
+        # synthetic values used as test fixtures, so a real credential committed in the
+        # same files is still reported.
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 
   config-validation:
     name: Configuration and compose validation

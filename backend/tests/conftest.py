@@ -69,6 +69,25 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def migrated_test_database() -> None:
+    """Apply the migrations to the test database once per session.
+
+    The suite truncates tables between tests but does not create them, so the schema has
+    to exist before the first ``container`` fixture runs. Using the real migration
+    environment keeps the tests exercising the same DDL that production runs, including
+    the Row-Level Security policies, instead of a ``create_all`` approximation.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    backend_root = Path(__file__).resolve().parent.parent
+    alembic_config = Config(str(backend_root / "alembic.ini"))
+    alembic_config.set_main_option("script_location", str(backend_root / "alembic"))
+    alembic_config.attributes["database_dsn"] = TEST_DATABASE_URL
+    command.upgrade(alembic_config, "head")
+
+
 @pytest.fixture
 def test_settings(tmp_path: Path) -> Iterator[Settings]:
     """Return settings pointing at the test database and a temporary CSV root."""

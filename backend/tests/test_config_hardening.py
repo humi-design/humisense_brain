@@ -11,7 +11,7 @@ import base64
 import pytest
 from pydantic import ValidationError
 
-from humisense.config import Settings
+from humisense.config import DEFAULT_DEV_SESSION_SECRET, Settings
 from humisense.errors import ConfigurationError
 from humisense.secrets.encrypted_db import KEY_BYTES
 
@@ -290,3 +290,62 @@ def test_committed_files_do_not_contain_a_master_key() -> None:
 
     assert checked > 0
     assert suspicious == [], f"possible committed key material: {suspicious}"
+
+
+def test_empty_env_file_values_fall_back_to_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A documented copy-and-run setup must not fail on an empty optional value.
+
+    ``.env.example`` lists optional settings with empty values. If an empty environment
+    value were passed to the field validator instead of being treated as unset,
+    ``DOCS_ENABLED=`` would abort startup with a boolean parse error.
+    """
+    monkeypatch.setenv("DOCS_ENABLED", "")
+    monkeypatch.setenv("OTEL_ENDPOINT", "")
+    monkeypatch.setenv("OIDC_ISSUER", "")
+    settings = Settings(_env_file=None)
+    assert settings.docs_enabled is None
+    assert settings.otel_endpoint is None
+    assert settings.oidc_issuer is None
+
+
+def test_empty_session_secret_is_not_accepted_as_a_real_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty session secret must resolve to the insecure default, never to "".
+
+    Resolving to the default is what makes production validation reject it. A literal
+    empty string would be a valid-length-zero secret that signs cookies with no key.
+    """
+    monkeypatch.setenv("SESSION_SECRET", "")
+    settings = Settings(_env_file=None)
+    assert settings.session_secret_value != ""
+    assert settings.session_secret_value == DEFAULT_DEV_SESSION_SECRET
+
+
+def test_empty_session_secret_is_refused_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fallback default must then be rejected by production validation."""
+    monkeypatch.setenv("SESSION_SECRET", "")
+    monkeypatch.setenv("APP_ENV", "production")
+    settings = Settings(
+        _env_file=None,
+        auth_mode="oidc",
+        oidc_issuer="https://issuer.example.com",
+        oidc_audience="humisense",
+        oidc_jwks_url="https://issuer.example.com/jwks",
+        cookie_secure=True,
+        cors_origins=("https://app.example.com",),
+        database_require_tls=True,
+        secrets_allow_env_provider=True,
+    )
+    with pytest.raises(ConfigurationError):
+        settings.validate_for_production()
+
+
+def test_a_short_session_secret_is_still_rejected() -> None:
+    """Empty is treated as unset; a real but weak value is still refused."""
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, session_secret="too-short")

@@ -27,10 +27,15 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 settings = get_settings()
 
+# The test suite migrates the test database by passing its DSN through the alembic
+# Config, so one migration environment can target either database without mutating the
+# process environment or the settings cache.
+database_dsn = config.attributes.get("database_dsn") or settings.database_dsn
+
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=settings.database_dsn,
+        url=database_dsn,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -54,7 +59,7 @@ async def run_migrations_online() -> None:
     # Build the engine from the unwrapped DSN rather than writing it into the alembic
     # Config: configparser treats '%' as interpolation syntax, so a URL-encoded password
     # would either fail or be silently mangled.
-    connectable = create_async_engine(settings.database_dsn, poolclass=pool.NullPool)
+    connectable = create_async_engine(database_dsn, poolclass=pool.NullPool)
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

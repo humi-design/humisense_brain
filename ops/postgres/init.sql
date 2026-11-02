@@ -16,6 +16,16 @@ BEGIN
 END
 $$;
 
+-- CREATE DATABASE cannot run inside a transaction or a DO block, so it is issued through
+-- \gexec: the SELECT yields the statement only when the database is absent, which keeps
+-- this script re-runnable. The role must already exist, because it is named as the owner.
+SELECT 'CREATE DATABASE humisense OWNER humisense_app'
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'humisense')\gexec
+
 GRANT CONNECT ON DATABASE humisense TO humisense_app;
+
+-- The schema grants belong to the application database, not to whichever database the
+-- container entrypoint happens to be connected to when it runs this file.
+\connect humisense
 GRANT CREATE, USAGE ON SCHEMA public TO humisense_app;
 ALTER SCHEMA public OWNER TO humisense_app;

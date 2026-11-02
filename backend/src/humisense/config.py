@@ -28,6 +28,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # `.env.example` lists optional settings with empty values so the file documents
+        # every knob. Without this, an empty value is passed to the field's validator
+        # instead of falling back to the default, and a boolean field such as
+        # DOCS_ENABLED fails to parse. Treating empty as unset keeps the documented
+        # copy-and-run setup working, and keeps optional settings optional.
+        env_ignore_empty=True,
     )
 
     # --- Core -------------------------------------------------------------

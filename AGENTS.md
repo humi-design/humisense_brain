@@ -83,6 +83,13 @@ npm run typecheck && npm run lint && npm test && npm run build
   metrics are disabled.
 - `ops/compose/.env` is git-ignored; `ops/compose/.env.example` is committed and must
   contain placeholders only (CI enforces this).
+- arq resolves worker settings from the **class** `__dict__` (`arq.worker.get_kwargs`
+  returns `settings_cls.__dict__`), so it reads class attributes only. Assigning
+  `redis_settings` or `cron_jobs` in `WorkerSettings.__init__` puts them on the instance
+  and arq silently ignores them, falling back to `localhost:6379`. Keep every arq setting a
+  class attribute; `test_worker.py` asserts what `get_kwargs` actually resolves. The worker
+  service also needs `CORS_ORIGINS` (it shares the production validator) and an arq
+  `--check` healthcheck (it serves no HTTP).
 
 ## Conventions
 

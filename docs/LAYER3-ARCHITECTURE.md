@@ -85,7 +85,8 @@ Statistical & Rule Evaluation  →  Anomaly Detection  →  Trend / Change-Point
       ▼
 Forecast / Correlation (where applicable)  →  Severity  →  Detection Event
       ▼
-Durable persistence  →  Outbox event (Layer 2's outbox, reused) for Layers 4+
+Durable persistence  →  read back through the API (downstream publication to Layers 4+ is
+                        pending a detection-capable outbox; see §10)
 ```
 
 Every stage is skippable when its preconditions are unmet (for example, readiness returns
@@ -217,4 +218,9 @@ benchmark on the recorded hardware.
 - Isolation Forest and correlation are offered but not enabled by default; they are enabled per
   tenant/entity only where the data characteristics justify them.
 - Retention for feature values and execution logs is not implemented.
+- The outbox row is keyed to a canonical record (a NOT NULL foreign key to
+  `canonical_records`), so detections cannot be published through it as-is. Publishing
+  detection events to Layers 4+ requires either a nullable aggregate reference or a
+  separate detection outbox; until then detections are durable in `detection_events` and
+  read back through the API rather than pushed downstream.
 - Layer 2 is a release candidate; Layer 3 depends on its branch until it merges.

@@ -120,6 +120,29 @@ npm run typecheck && npm run lint && npm test && npm run build
   idempotency path against a real database. It is a measurement tool: it asserts nothing and
   its numbers are recorded in `docs/LAYER2-RELEASE.md`.
 
+## Layer 3 (analytics engine)
+
+- Freshness is judged against the **end of the requested window**, not the wall clock. A
+  historical window (`until` in the past) must not be marked stale: pass the window end as
+  the quality `as_of`. Judging against `now` silently makes every backfill stale and
+  readiness then suppresses every detection.
+- Quality `status` is a `DataQualityStatus` enum; the `detection_events` columns `domain`,
+  `severity`, `detection_category`, and `data_quality_status` are plain strings. Do not call
+  `.value` on the row attributes — only `status` is a `DetectionStatus` enum.
+- A canonical record's foreign key to its raw record is set by id, so a unit of work cannot
+  infer the insert order. Any fixture or code that writes both must flush the raw record
+  first (see `tests/layer3/test_engine.py::_seed_series`).
+- The engine analyzes each signal in isolation: a per-signal failure is a `StageError` in
+  `RunResult.skips` and the run continues, so one bad signal never fails the job. A run with
+  any skip finishes `PARTIAL`, not `SUCCEEDED`.
+- Evidence is stored as references, never payload values. Do not put raw observation values
+  into `evidence_references`; the contract is provenance-not-payloads.
+- Detectors are deterministic and dependency-free. Isolation Forest is seeded; there is no
+  unseeded randomness anywhere in the sweep.
+- The Layer 2 outbox cannot carry detection events (its `canonical_record_id` is NOT NULL),
+  so detections are read back through the API rather than published. See
+  `docs/LAYER3-ARCHITECTURE.md` §10.
+
 ## Conventions
 
 - Python: 3.12+, Ruff (line length and rules in `backend/pyproject.toml`), mypy strict on

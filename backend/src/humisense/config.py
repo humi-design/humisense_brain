@@ -155,6 +155,16 @@ class Settings(BaseSettings):
     layer2_publish_secret_ref: str | None = None
     layer2_publish_bearer_token: SecretStr | None = None
 
+    # --- Layer 3 analytics ------------------------------------------------
+    layer3_sweep_enabled: bool = False
+    """Whether the worker runs the scheduled analytics sweep. Disabled by default: a
+    deployment that has not sized its windows should not have detection running on a timer
+    it did not ask for. The API run endpoint works either way."""
+    layer3_sweep_window_seconds: int = 86_400
+    """How far back each scheduled run looks."""
+    layer3_sweep_row_limit: int = 20_000
+    """Upper bound on canonical records one scheduled run reads per tenant."""
+
     # --- Resource protection ---------------------------------------------
     rate_limit_enabled: bool = True
     task_queue_mode: Literal["arq", "inline"] = "arq"

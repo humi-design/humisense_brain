@@ -211,3 +211,140 @@ def remove_layer2_rls() -> None:
     for table in LAYER2_RLS_TABLES:
         for statement in disable_policy_sql(table):
             op.execute(statement)
+
+
+# --- Layer 3 ---------------------------------------------------------------------
+
+LAYER3_RLS_TABLES: tuple[str, ...] = (
+    "analytics_jobs",
+    "analytics_execution_logs",
+    "data_quality_results",
+    "data_readiness_results",
+    "feature_definitions",
+    "feature_values",
+    "baseline_definitions",
+    "baseline_versions",
+    "analytics_rules",
+    "analytics_rule_versions",
+    "anomaly_detections",
+    "trend_results",
+    "change_point_results",
+    "forecast_results",
+    "correlation_results",
+    "model_registry",
+    "model_evaluations",
+    "detection_events",
+    "detection_event_history",
+)
+"""Layer 3 tables. Applied by the Layer 3 migration so the Layer 2 revision stays
+reproducible against a database that predates Layer 3."""
+
+# The execution log is a ledger of how a run progressed; it must not be rewritten.
+ANALYTICS_LOG_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION analytics_execution_logs_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'analytics_execution_logs is append-only; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS analytics_execution_logs_immutable ON analytics_execution_logs;",
+    """
+    CREATE TRIGGER analytics_execution_logs_immutable
+        BEFORE UPDATE OR DELETE ON analytics_execution_logs
+        FOR EACH ROW EXECUTE FUNCTION analytics_execution_logs_reject_mutation();
+    """,
+)
+
+DROP_ANALYTICS_LOG_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS analytics_execution_logs_immutable ON analytics_execution_logs;",
+    "DROP FUNCTION IF EXISTS analytics_execution_logs_reject_mutation();",
+)
+
+# The detection lifecycle history is the audit trail of a detection; it is append-only, so
+# a status change cannot be silently rewritten to hide that an event was suppressed.
+DETECTION_HISTORY_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION detection_event_history_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'detection_event_history is append-only; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS detection_event_history_immutable ON detection_event_history;",
+    """
+    CREATE TRIGGER detection_event_history_immutable
+        BEFORE UPDATE OR DELETE ON detection_event_history
+        FOR EACH ROW EXECUTE FUNCTION detection_event_history_reject_mutation();
+    """,
+)
+
+DROP_DETECTION_HISTORY_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS detection_event_history_immutable ON detection_event_history;",
+    "DROP FUNCTION IF EXISTS detection_event_history_reject_mutation();",
+)
+
+# Baseline and rule versions are immutable once written: a new version is a new row, so
+# history cannot be edited after the fact.
+BASELINE_VERSION_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION baseline_versions_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'baseline_versions is immutable; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS baseline_versions_immutable ON baseline_versions;",
+    """
+    CREATE TRIGGER baseline_versions_immutable
+        BEFORE UPDATE OR DELETE ON baseline_versions
+        FOR EACH ROW EXECUTE FUNCTION baseline_versions_reject_mutation();
+    """,
+)
+
+DROP_BASELINE_VERSION_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS baseline_versions_immutable ON baseline_versions;",
+    "DROP FUNCTION IF EXISTS baseline_versions_reject_mutation();",
+)
+
+
+def apply_layer3_rls() -> None:
+    """Apply RLS and the immutability triggers to the Layer 3 tables.
+
+    Called from the Layer 3 Alembic migration. ``app_current_org()`` is created by the
+    Layer 1 migration; it is recreated here defensively so this migration is correct even
+    when run standalone.
+    """
+    from alembic import op
+
+    op.execute(CREATE_HELPER_FUNCTION)
+    for table in LAYER3_RLS_TABLES:
+        for statement in enable_policy_sql(table):
+            op.execute(statement)
+    for statement in ANALYTICS_LOG_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in DETECTION_HISTORY_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in BASELINE_VERSION_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+
+
+def remove_layer3_rls() -> None:
+    """Reverse :func:`apply_layer3_rls`."""
+    from alembic import op
+
+    for statement in DROP_BASELINE_VERSION_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in DROP_DETECTION_HISTORY_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in DROP_ANALYTICS_LOG_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for table in LAYER3_RLS_TABLES:
+        for statement in disable_policy_sql(table):
+            op.execute(statement)

@@ -769,3 +769,701 @@ class RecordProcessingEvent(UUIDPrimaryKey, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# --- Layer 3: Analytics, Intelligence & Detection ---------------------------------
+#
+# Every table below is tenant-owned and carries a NOT NULL ``organization_id`` so the same
+# Row-Level Security treatment as Layers 1 and 2 applies without exception. The Layer 3
+# migration applies ``ENABLE`` + ``FORCE`` RLS to each of these tables.
+#
+# JSONB is used only where the shape is genuinely variable (rule condition, detection
+# evidence, quality issues, counters). Identity, classification, versions, and provenance
+# are typed columns, so they can be indexed and constrained.
+
+
+class JobStatus(str, enum.Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class DetectionStatus(str, enum.Enum):
+    """Mirrors ``humisense.layer3.contract.DetectionLifecycle`` for persistence."""
+
+    OPEN = "open"
+    ACKNOWLEDGED = "acknowledged"
+    INVESTIGATING = "investigating"
+    RESOLVED = "resolved"
+    SUPPRESSED = "suppressed"
+    RECOVERED = "recovered"
+
+
+class ModelStatus(str, enum.Enum):
+    REGISTERED = "registered"
+    EVALUATED = "evaluated"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    ROLLED_BACK = "rolled_back"
+
+
+class AnalyticsJob(UUIDPrimaryKey, Base):
+    """One unit of analytical execution, keyed for idempotency.
+
+    ``job_key`` is a deterministic string (job type + entity + metric + window) so a
+    re-run of the same window upserts rather than creating a second job, which is what
+    makes scheduled and backfill execution idempotent.
+    """
+
+    __tablename__ = "analytics_jobs"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "job_key", name="uq_analytics_jobs_org_key"),
+        Index("ix_analytics_jobs_organization_id", "organization_id"),
+        Index("ix_analytics_jobs_org_status", "organization_id", "status"),
+        Index("ix_analytics_jobs_org_created", "organization_id", "created_at"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    job_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    job_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    entity_id: Mapped[str | None] = mapped_column(String(200))
+    metric: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(
+            JobStatus,
+            name="analytics_job_status",
+            native_enum=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=JobStatus.QUEUED,
+    )
+    watermark: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    """The newest event time processed, so the next run resumes incrementally."""
+    detections: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnalyticsExecutionLog(UUIDPrimaryKey, Base):
+    """Append-only per-run stage log. Rejects UPDATE and DELETE at the database."""
+
+    __tablename__ = "analytics_execution_logs"
+    __table_args__ = (
+        Index("ix_analytics_execution_logs_organization_id", "organization_id"),
+        Index("ix_analytics_execution_logs_job", "job_id", "created_at"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("analytics_jobs.id", ondelete="CASCADE")
+    )
+    stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    counters: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DataQualityResultRow(UUIDPrimaryKey, Base):
+    """Persisted data-quality assessment for one entity/metric window."""
+
+    __tablename__ = "data_quality_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "window_end",
+            name="uq_data_quality_results_window",
+        ),
+        Index("ix_data_quality_results_organization_id", "organization_id"),
+        Index("ix_data_quality_results_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    evaluated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    missing_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    invalid_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    issues: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DataReadinessResultRow(UUIDPrimaryKey, Base):
+    """Persisted readiness evaluation for one method/entity/metric window."""
+
+    __tablename__ = "data_readiness_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "method", "window_end",
+            name="uq_data_readiness_results_window",
+        ),
+        Index("ix_data_readiness_results_organization_id", "organization_id"),
+        Index("ix_data_readiness_results_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    method: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    reasons: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    min_required: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FeatureDefinition(UUIDPrimaryKey, Base):
+    """A registered, versioned feature definition."""
+
+    __tablename__ = "feature_definitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "name", "version", name="uq_feature_definitions_name_version"
+        ),
+        Index("ix_feature_definitions_organization_id", "organization_id"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    method: Mapped[str] = mapped_column(String(120), nullable=False)
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class FeatureValueRow(UUIDPrimaryKey, Base):
+    """A computed feature observation, idempotent on its natural key."""
+
+    __tablename__ = "feature_values"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "name", "version", "at",
+            name="uq_feature_values_observation",
+        ),
+        Index("ix_feature_values_organization_id", "organization_id"),
+        Index("ix_feature_values_org_entity", "organization_id", "entity_id", "metric", "at"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    method: Mapped[str] = mapped_column(String(120), nullable=False)
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quality_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    sources: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class BaselineDefinition(UUIDPrimaryKey, Base):
+    """A baseline's stable identity and configuration; versions live separately."""
+
+    __tablename__ = "baseline_definitions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "baseline_type",
+            name="uq_baseline_definitions_identity",
+        ),
+        Index("ix_baseline_definitions_organization_id", "organization_id"),
+        Index("ix_baseline_definitions_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    baseline_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    """0 means no version has been built yet."""
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class BaselineVersionRow(UUIDPrimaryKey, Base):
+    """An immutable baseline version. Never updated in place; a new row is added."""
+
+    __tablename__ = "baseline_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "baseline_id", "version", name="uq_baseline_versions_version"
+        ),
+        Index("ix_baseline_versions_organization_id", "organization_id"),
+        Index("ix_baseline_versions_baseline", "baseline_id", "version"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    baseline_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("baseline_definitions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    mean: Mapped[float | None] = mapped_column(Float)
+    median: Mapped[float | None] = mapped_column(Float)
+    stddev: Mapped[float | None] = mapped_column(Float)
+    minimum: Mapped[float | None] = mapped_column(Float)
+    maximum: Mapped[float | None] = mapped_column(Float)
+    p10: Mapped[float | None] = mapped_column(Float)
+    p25: Mapped[float | None] = mapped_column(Float)
+    p75: Mapped[float | None] = mapped_column(Float)
+    p90: Mapped[float | None] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quality_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    dataset_ref: Mapped[str | None] = mapped_column(String(200))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AnalyticsRule(UUIDPrimaryKey, Base):
+    """A rule's stable identity; versions live separately."""
+
+    __tablename__ = "analytics_rules"
+    __table_args__ = (
+        UniqueConstraint("rule_id", name="uq_analytics_rules_rule_id"),
+        Index("ix_analytics_rules_organization_id", "organization_id"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    domain: Mapped[str] = mapped_column(String(30), nullable=False, default="generic")
+    scope: Mapped[str] = mapped_column(String(40), nullable=False, default="entity")
+    entity_id: Mapped[str | None] = mapped_column(String(200))
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AnalyticsRuleVersionRow(UUIDPrimaryKey, Base):
+    """An immutable rule version, including the validated condition."""
+
+    __tablename__ = "analytics_rule_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "rule_id", "version", name="uq_analytics_rule_versions_version"
+        ),
+        Index("ix_analytics_rule_versions_organization_id", "organization_id"),
+        Index("ix_analytics_rule_versions_rule", "rule_id", "version"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    rule_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("analytics_rules.rule_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    condition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AnomalyDetectionRow(UUIDPrimaryKey, Base):
+    """Raw detector output, before it becomes a detection event."""
+
+    __tablename__ = "anomaly_detections"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "algorithm_name", "window_end",
+            "baseline_version",
+            name="uq_anomaly_detections_observation",
+        ),
+        Index("ix_anomaly_detections_organization_id", "organization_id"),
+        Index("ix_anomaly_detections_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    algorithm_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    anomaly_score: Mapped[float | None] = mapped_column(Float)
+    observed_value: Mapped[float | None] = mapped_column(Float)
+    expected_value: Mapped[float | None] = mapped_column(Float)
+    deviation: Mapped[float | None] = mapped_column(Float)
+    baseline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    baseline_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class TrendResultRow(UUIDPrimaryKey, Base):
+    """Persisted trend analysis."""
+
+    __tablename__ = "trend_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "window_end", name="uq_trend_results_window"
+        ),
+        Index("ix_trend_results_organization_id", "organization_id"),
+        Index("ix_trend_results_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    direction: Mapped[str] = mapped_column(String(20), nullable=False)
+    magnitude: Mapped[float | None] = mapped_column(Float)
+    method: Mapped[str] = mapped_column(String(80), nullable=False)
+    r_squared: Mapped[float | None] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ChangePointResultRow(UUIDPrimaryKey, Base):
+    """Persisted change-point detection."""
+
+    __tablename__ = "change_point_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "detected_at",
+            name="uq_change_point_results_detected",
+        ),
+        Index("ix_change_point_results_organization_id", "organization_id"),
+        Index("ix_change_point_results_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    method: Mapped[str] = mapped_column(String(80), nullable=False)
+    previous_mean: Mapped[float | None] = mapped_column(Float)
+    new_mean: Mapped[float | None] = mapped_column(Float)
+    magnitude: Mapped[float | None] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    uncertainty: Mapped[str | None] = mapped_column(Text)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ForecastResultRow(UUIDPrimaryKey, Base):
+    """Persisted forecast, including its evaluation against a naive baseline."""
+
+    __tablename__ = "forecast_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_id", "metric", "generated_at", "horizon_steps",
+            name="uq_forecast_results_generation",
+        ),
+        Index("ix_forecast_results_organization_id", "organization_id"),
+        Index("ix_forecast_results_org_entity", "organization_id", "entity_id", "metric"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    model_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    model_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    horizon_steps: Mapped[int] = mapped_column(Integer, nullable=False)
+    predicted: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    lower_bound: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    upper_bound: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    evaluation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    limitations: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class CorrelationResultRow(UUIDPrimaryKey, Base):
+    """Persisted signal correlation. Always carries a no-causation statement."""
+
+    __tablename__ = "correlation_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "entity_a", "metric_a", "entity_b", "metric_b", "method",
+            "window_end", name="uq_correlation_results_observation",
+        ),
+        Index("ix_correlation_results_organization_id", "organization_id"),
+        Index("ix_correlation_results_org_pair", "organization_id", "entity_a", "entity_b"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_a: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric_a: Mapped[str] = mapped_column(String(120), nullable=False)
+    entity_b: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric_b: Mapped[str] = mapped_column(String(120), nullable=False)
+    method: Mapped[str] = mapped_column(String(40), nullable=False)
+    coefficient: Mapped[float | None] = mapped_column(Float)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lag_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    caveat: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ModelRegistryRow(UUIDPrimaryKey, Base):
+    """A registered model version and its deployment state."""
+
+    __tablename__ = "model_registry"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "model_key", "version", name="uq_model_registry_key_version"
+        ),
+        Index("ix_model_registry_organization_id", "organization_id"),
+        Index("ix_model_registry_org_status", "organization_id", "status"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    model_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    model_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[ModelStatus] = mapped_column(
+        Enum(ModelStatus, name="model_status", native_enum=True, values_callable=_enum_values),
+        nullable=False,
+        default=ModelStatus.REGISTERED,
+    )
+    dataset_ref: Mapped[str | None] = mapped_column(String(200))
+    feature_versions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    training_params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    evaluation: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    artifact_ref: Mapped[str | None] = mapped_column(String(200))
+    """A reference, never a path to a file the process will deserialize blindly."""
+    owner: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    rollback_version: Mapped[str | None] = mapped_column(String(40))
+    trained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ModelEvaluationRow(UUIDPrimaryKey, Base):
+    """An evaluation of one model version against a dataset."""
+
+    __tablename__ = "model_evaluations"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "model_id", "dataset_ref", name="uq_model_evaluations_dataset"
+        ),
+        Index("ix_model_evaluations_organization_id", "organization_id"),
+        Index("ix_model_evaluations_model", "model_id"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    model_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("model_registry.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_ref: Mapped[str] = mapped_column(String(200), nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    evaluated_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class DetectionEventRow(UUIDPrimaryKey, Base):
+    """The standardized detection event.
+
+    Mutable only in ``status`` and lifecycle fields; the analytical content is written once.
+    Large source payloads are never copied here — ``evidence_references`` points at the
+    Layer 2 records instead.
+    """
+
+    __tablename__ = "detection_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "organization_id", "detection_id", name="uq_detection_events_detection_id"
+        ),
+        Index("ix_detection_events_organization_id", "organization_id"),
+        Index("ix_detection_events_org_status", "organization_id", "status"),
+        Index("ix_detection_events_org_entity", "organization_id", "entity_id", "metric"),
+        Index("ix_detection_events_org_detected", "organization_id", "detected_at"),
+        Index("ix_detection_events_org_severity", "organization_id", "severity"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    detection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    domain: Mapped[str] = mapped_column(String(30), nullable=False)
+    source_system: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    entity_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    entity_type: Mapped[str | None] = mapped_column(String(120))
+    metric: Mapped[str] = mapped_column(String(120), nullable=False)
+    detection_category: Mapped[str] = mapped_column(String(40), nullable=False)
+    detection_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False)
+    observed_value: Mapped[float | None] = mapped_column(Float)
+    expected_value: Mapped[float | None] = mapped_column(Float)
+    deviation: Mapped[float | None] = mapped_column(Float)
+    unit: Mapped[str | None] = mapped_column(String(40))
+    observation_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observation_window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    algorithm_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    algorithm_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    model_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    model_version: Mapped[str | None] = mapped_column(String(40))
+    baseline_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    baseline_version: Mapped[int | None] = mapped_column(Integer)
+    feature_versions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    anomaly_score: Mapped[float | None] = mapped_column(Float)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    data_quality_status: Mapped[str] = mapped_column(String(20), nullable=False, default="unknown")
+    evidence_references: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    limitations: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    schema_version: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[DetectionStatus] = mapped_column(
+        Enum(
+            DetectionStatus,
+            name="detection_status",
+            native_enum=True,
+            values_callable=_enum_values,
+        ),
+        nullable=False,
+        default=DetectionStatus.OPEN,
+    )
+    group_key: Mapped[str | None] = mapped_column(String(200))
+    """Groups duplicate detections of the same condition across a cooldown window."""
+    suppressed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class DetectionEventHistoryRow(UUIDPrimaryKey, Base):
+    """Append-only lifecycle history for a detection event."""
+
+    __tablename__ = "detection_event_history"
+    __table_args__ = (
+        Index("ix_detection_event_history_organization_id", "organization_id"),
+        Index("ix_detection_event_history_detection", "detection_id", "created_at"),
+    )
+
+    organization_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False
+    )
+    detection_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    from_status: Mapped[str | None] = mapped_column(String(30))
+    to_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
+    reason: Mapped[str | None] = mapped_column(Text)
+    correlation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

@@ -337,3 +337,129 @@ class QuarantineReplayResponse(BaseModel):
     replayed: bool
     state: str
     error_code: str | None = None
+
+
+# --- Layer 3: analytics -------------------------------------------------------
+
+
+class AnalyticsRunRequest(BaseModel):
+    """Request to run an analytics job over a bounded window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    since: datetime | None = None
+    until: datetime | None = None
+    connection_id: uuid.UUID | None = None
+    job_type: Literal["analytics_full", "quality_scan"] = "analytics_full"
+    row_limit: int = Field(default=20_000, ge=1, le=200_000)
+
+
+class AnalyticsRunResponse(BaseModel):
+    job_type: str
+    correlation_id: str
+    status: str
+    signals_analyzed: int
+    detections: int
+    suppressed: int
+    quality_issues: int
+    skips: list[dict[str, str]]
+    counters: dict[str, int]
+
+
+class DetectionResponse(BaseModel):
+    """One detection as returned to a consumer.
+
+    Evidence is returned as references, never as a payload, matching the storage contract.
+    """
+
+    detection_id: uuid.UUID
+    domain: str
+    entity_id: str
+    entity_type: str | None
+    metric: str
+    detection_category: str
+    detection_type: str
+    severity: str
+    status: str
+    observed_value: float | None
+    expected_value: float | None
+    deviation: float | None
+    unit: str | None
+    observation_window_start: datetime | None
+    observation_window_end: datetime | None
+    detected_at: datetime
+    algorithm_name: str
+    algorithm_version: str
+    baseline_id: uuid.UUID | None
+    baseline_version: int | None
+    anomaly_score: float | None
+    confidence: float | None
+    data_quality_status: str
+    evidence_references: list[dict[str, Any]]
+    explanation: str
+    limitations: list[str]
+    schema_version: str
+    correlation_id: str
+
+
+class DetectionListResponse(BaseModel):
+    items: list[DetectionResponse]
+    total: int
+
+
+class DetectionStatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[
+        "open", "acknowledged", "investigating", "resolved", "suppressed", "recovered"
+    ]
+    reason: str | None = Field(default=None, max_length=500)
+    suppress_for_seconds: int | None = Field(default=None, ge=0, le=2_592_000)
+
+
+class QualityResultResponse(BaseModel):
+    entity_id: str
+    metric: str
+    status: str
+    evaluated_count: int
+    missing_count: int
+    invalid_count: int
+    duplicate_count: int
+    issues: list[dict[str, Any]]
+    window_start: datetime | None
+    window_end: datetime | None
+
+
+class QualityListResponse(BaseModel):
+    items: list[QualityResultResponse]
+    total: int
+
+
+class RuleCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: StrictName
+    description: Description = ""
+    domain: Literal["industrial", "business", "data_quality", "generic"] = "generic"
+    scope: Literal["entity", "global"] = "entity"
+    entity_id: str | None = Field(default=None, max_length=200)
+    metric: str = Field(min_length=1, max_length=120)
+    condition: dict[str, Any]
+    window_seconds: int = Field(default=0, ge=0)
+    severity: Literal["info", "low", "medium", "high", "critical"] = "medium"
+    enabled: bool = True
+
+
+class RuleResponse(BaseModel):
+    rule_id: uuid.UUID
+    name: str
+    description: str
+    domain: str
+    scope: str
+    entity_id: str | None
+    metric: str
+    condition: dict[str, Any]
+    window_seconds: int
+    severity: str
+    enabled: bool
+    version: int

@@ -35,6 +35,26 @@ TEST_DATABASE_URL = os.environ.get(
 TEST_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 TABLES_IN_TRUNCATION_ORDER = (
+    # Layer 3 (children before parents)
+    "detection_event_history",
+    "detection_events",
+    "model_evaluations",
+    "model_registry",
+    "correlation_results",
+    "forecast_results",
+    "change_point_results",
+    "trend_results",
+    "anomaly_detections",
+    "analytics_rule_versions",
+    "analytics_rules",
+    "baseline_versions",
+    "baseline_definitions",
+    "feature_values",
+    "feature_definitions",
+    "data_readiness_results",
+    "data_quality_results",
+    "analytics_execution_logs",
+    "analytics_jobs",
     # Layer 2 (children before parents)
     "record_processing_events",
     "outbox_events",

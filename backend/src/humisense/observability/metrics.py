@@ -150,6 +150,72 @@ L2_QUEUE_LAG = Gauge(
     "Age of the oldest unprocessed received record.",
 )
 
+# --- Layer 3 ---------------------------------------------------------------------
+
+L3_RUNS_STARTED = Counter(
+    "humisense_layer3_runs_started_total",
+    "Analytics runs started, by job type.",
+    labelnames=("job_type",),
+)
+
+L3_RUNS_FINISHED = Counter(
+    "humisense_layer3_runs_finished_total",
+    "Analytics runs finished, by job type and status.",
+    labelnames=("job_type", "status"),
+)
+
+L3_RUN_DURATION = Histogram(
+    "humisense_layer3_run_duration_seconds",
+    "Wall-clock duration of an analytics run.",
+    labelnames=("job_type",),
+    buckets=(0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 300),
+)
+
+L3_DETECTIONS = Counter(
+    "humisense_layer3_detections_total",
+    "Detections emitted, by domain, severity, and method.",
+    labelnames=("domain", "severity", "method"),
+)
+
+L3_DETECTIONS_SUPPRESSED = Counter(
+    "humisense_layer3_detections_suppressed_total",
+    "Detections withheld by cooldown or suppression.",
+    labelnames=("reason",),
+)
+
+L3_QUALITY_RESULTS = Counter(
+    "humisense_layer3_quality_results_total",
+    "Data-quality assessments, by status.",
+    labelnames=("status",),
+)
+
+L3_READINESS_RESULTS = Counter(
+    "humisense_layer3_readiness_results_total",
+    "Readiness evaluations, by method and status.",
+    labelnames=("method", "status"),
+)
+
+L3_SKIPS = Counter(
+    "humisense_layer3_skips_total",
+    "Signals skipped before detection, by stage and error code.",
+    labelnames=("stage", "reason"),
+)
+
+L3_FEATURES_COMPUTED = Counter(
+    "humisense_layer3_features_computed_total",
+    "Feature values computed and persisted.",
+)
+
+L3_BASELINES_BUILT = Counter(
+    "humisense_layer3_baselines_built_total",
+    "Baseline versions built.",
+)
+
+L3_BASELINE_DRIFT_BLOCKED = Counter(
+    "humisense_layer3_baseline_drift_blocked_total",
+    "Baseline rebuilds blocked by the drift guard.",
+)
+
 
 class Metrics:
     """Thin wrapper that keeps tenant identifiers out of label values."""
@@ -244,3 +310,37 @@ class Metrics:
 
     def layer2_queue_lag(self, *, seconds: float) -> None:
         L2_QUEUE_LAG.set(seconds)
+
+    # --- Layer 3 ----------------------------------------------------------
+
+    def layer3_run_started(self, *, job_type: str) -> None:
+        L3_RUNS_STARTED.labels(job_type=job_type).inc()
+
+    def layer3_run_finished(self, *, job_type: str, status: str, duration_seconds: float) -> None:
+        L3_RUNS_FINISHED.labels(job_type=job_type, status=status).inc()
+        L3_RUN_DURATION.labels(job_type=job_type).observe(duration_seconds)
+
+    def layer3_detection(self, *, domain: str, severity: str, method: str) -> None:
+        L3_DETECTIONS.labels(domain=domain, severity=severity, method=method).inc()
+
+    def layer3_detection_suppressed(self, *, reason: str) -> None:
+        L3_DETECTIONS_SUPPRESSED.labels(reason=reason).inc()
+
+    def layer3_quality_result(self, *, status: str) -> None:
+        L3_QUALITY_RESULTS.labels(status=status).inc()
+
+    def layer3_readiness_result(self, *, method: str, status: str) -> None:
+        L3_READINESS_RESULTS.labels(method=method, status=status).inc()
+
+    def layer3_skip(self, *, stage: str, reason: str) -> None:
+        L3_SKIPS.labels(stage=stage, reason=reason).inc()
+
+    def layer3_features_computed(self, *, count: int = 1) -> None:
+        if count:
+            L3_FEATURES_COMPUTED.inc(count)
+
+    def layer3_baseline_built(self) -> None:
+        L3_BASELINES_BUILT.inc()
+
+    def layer3_baseline_drift_blocked(self) -> None:
+        L3_BASELINE_DRIFT_BLOCKED.inc()

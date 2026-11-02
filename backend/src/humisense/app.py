@@ -29,7 +29,15 @@ from humisense.api.middleware import (
     RequestLogMiddleware,
     SecurityHeadersMiddleware,
 )
-from humisense.api.routers import auth, connections, connectors, health, ingestion, metrics
+from humisense.api.routers import (
+    analytics,
+    auth,
+    connections,
+    connectors,
+    health,
+    ingestion,
+    metrics,
+)
 from humisense.config import Settings, get_settings
 from humisense.container import Container, build_container
 from humisense.logging_setup import configure_logging
@@ -106,6 +114,7 @@ def create_app(settings: Settings | None = None, *, container: Container | None 
     app.include_router(connectors.router, prefix=prefix)
     app.include_router(connections.router, prefix=prefix)
     app.include_router(ingestion.router, prefix=prefix)
+    app.include_router(analytics.router, prefix=prefix)
     if resolved_settings.layer2_ingest_enabled:
         # Registering the machine receiver only when it is enabled means a disabled
         # deployment has no route to reach it, rather than a route that exists and refuses.

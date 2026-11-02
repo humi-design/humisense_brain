@@ -35,6 +35,14 @@ TEST_DATABASE_URL = os.environ.get(
 TEST_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 TABLES_IN_TRUNCATION_ORDER = (
+    # Layer 2 (children before parents)
+    "record_processing_events",
+    "outbox_events",
+    "record_quarantine",
+    "canonical_records",
+    "raw_records",
+    "ingest_batches",
+    # Layer 1
     "ingestion_receipts",
     "source_records",
     "sync_jobs",

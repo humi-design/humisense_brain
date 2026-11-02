@@ -139,6 +139,22 @@ class Settings(BaseSettings):
     layer2_timeout_seconds: float = 10.0
     layer2_max_attempts: int = 4
 
+    # --- Layer 2 receiver -------------------------------------------------
+    # The token Layer 1 presents when delivering to this deployment's own receiver. Only
+    # needed when this process both produces and receives (a single-node deployment).
+    layer2_ingest_token: SecretStr | None = None
+    layer2_ingest_enabled: bool = True
+    """Whether the ingestion receiver route is registered. Disabled means the route does
+    not exist at all, rather than existing and rejecting."""
+    layer2_max_batch_bytes: int = 8 * 1024 * 1024
+    layer2_pipeline_max_attempts: int = 3
+    layer2_publish_mode: Literal["disabled", "log", "http"] = "disabled"
+    layer2_publish_base_url: str | None = None
+    layer2_publish_secret_ref: str | None = None
+    layer2_publish_bearer_token: SecretStr | None = None
+    layer2_retention_raw_days: int = 90
+    """Retention for preserved raw payloads. 0 means retain indefinitely."""
+
     # --- Resource protection ---------------------------------------------
     rate_limit_enabled: bool = True
     task_queue_mode: Literal["arq", "inline"] = "arq"
@@ -269,6 +285,22 @@ class Settings(BaseSettings):
         if self.layer2_bearer_token is not None:
             return self.layer2_bearer_token.get_secret_value()
         return os.environ.get("HUMISENSE_LAYER2_TOKEN") or None
+
+    def layer2_ingest_token_resolved(self) -> str | None:
+        """Return the token this deployment accepts on its ingestion receiver.
+
+        Prefers explicit configuration, then the environment. When neither is set the
+        receiver cannot authenticate a caller, so the route refuses every request rather
+        than accepting unauthenticated writes.
+        """
+        if self.layer2_ingest_token is not None:
+            return self.layer2_ingest_token.get_secret_value()
+        return os.environ.get("HUMISENSE_LAYER2_INGEST_TOKEN") or None
+
+    def layer2_publish_token_resolved(self) -> str | None:
+        if self.layer2_publish_bearer_token is not None:
+            return self.layer2_publish_bearer_token.get_secret_value()
+        return os.environ.get("HUMISENSE_LAYER2_PUBLISH_TOKEN") or None
 
     def validate_for_production(self) -> None:
         """Refuse to start with an insecure production configuration.

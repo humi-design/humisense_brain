@@ -36,7 +36,7 @@ data/       Synthetic development data (clearly labelled, never live telemetry)
 ## Prerequisites
 
 - Python 3.12 or newer, with [`uv`](https://docs.astral.sh/uv/)
-- Node.js 20 or newer
+- Node.js 22.19 or newer (Vitest 5 and its `undici` dependency do not support Node 20)
 - Docker (for PostgreSQL and Redis), or local PostgreSQL 16 and Redis 7
 - macOS, Linux, or a Linux container
 

@@ -29,7 +29,7 @@ from humisense.api.middleware import (
     RequestLogMiddleware,
     SecurityHeadersMiddleware,
 )
-from humisense.api.routers import auth, connections, connectors, health, metrics
+from humisense.api.routers import auth, connections, connectors, health, ingestion, metrics
 from humisense.config import Settings, get_settings
 from humisense.container import Container, build_container
 from humisense.logging_setup import configure_logging
@@ -105,6 +105,12 @@ def create_app(settings: Settings | None = None, *, container: Container | None 
     app.include_router(auth.router, prefix=prefix)
     app.include_router(connectors.router, prefix=prefix)
     app.include_router(connections.router, prefix=prefix)
+    app.include_router(ingestion.router, prefix=prefix)
+    if resolved_settings.layer2_ingest_enabled:
+        # Registering the machine receiver only when it is enabled means a disabled
+        # deployment has no route to reach it, rather than a route that exists and refuses.
+        # The human-facing quarantine endpoints stay available either way.
+        app.include_router(ingestion.machine_router, prefix=prefix)
     # The scrape endpoint is registered only when metrics are enabled, so a disabled
     # deployment has no route to reach it at all.
     if resolved_settings.metrics_enabled:
@@ -113,6 +119,6 @@ def create_app(settings: Settings | None = None, *, container: Container | None 
     @app.get("/", include_in_schema=False)
     async def root() -> dict[str, Any]:
         """Return a minimal, non-informative service banner."""
-        return {"service": "humisense-brain", "layer": 1, "version": __version__}
+        return {"service": "humisense-brain", "layer": 2, "version": __version__}
 
     return app

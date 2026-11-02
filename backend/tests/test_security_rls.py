@@ -246,9 +246,10 @@ async def test_every_tenant_table_is_either_rls_scoped_or_auth_scoped() -> None:
     tenant_tables = {
         table.name for table in Base.metadata.tables.values() if "organization_id" in table.columns
     }
-    unprotected = tenant_tables - set(rls_module.RLS_TABLES) - AUTH_SCOPE_TABLES
+    rls_scoped = set(rls_module.RLS_TABLES) | set(rls_module.LAYER2_RLS_TABLES)
+    unprotected = tenant_tables - rls_scoped - AUTH_SCOPE_TABLES
     assert unprotected == set(), f"tables with no isolation mechanism: {sorted(unprotected)}"
-    assert set(rls_module.RLS_TABLES) <= tenant_tables
+    assert rls_scoped <= tenant_tables
 
 
 async def test_mapped_columns_match_migration_columns(container: Container) -> None:

@@ -83,6 +83,73 @@ AUDIT_WRITE_FAILURES = Counter(
     "Audit events that could not be persisted.",
 )
 
+# --- Layer 2 ---------------------------------------------------------------------
+
+L2_RECORDS_RECEIVED = Counter(
+    "humisense_layer2_records_received_total",
+    "Records received by the Layer 2 ingestion receiver.",
+)
+
+L2_RECORDS_STORED = Counter(
+    "humisense_layer2_records_stored_total",
+    "Canonical records stored by Layer 2, by data family.",
+    labelnames=("data_family",),
+)
+
+L2_RECORDS_DUPLICATE = Counter(
+    "humisense_layer2_records_duplicate_total",
+    "Records recognized as duplicate deliveries.",
+)
+
+L2_RECORDS_QUARANTINED = Counter(
+    "humisense_layer2_records_quarantined_total",
+    "Records quarantined, by error code.",
+    labelnames=("reason",),
+)
+
+L2_VALIDATION_FAILURES = Counter(
+    "humisense_layer2_validation_failures_total",
+    "Records that failed validation, by error code.",
+    labelnames=("reason",),
+)
+
+L2_NORMALIZATION_FAILURES = Counter(
+    "humisense_layer2_normalization_failures_total",
+    "Records that failed normalization, by error code.",
+    labelnames=("reason",),
+)
+
+L2_RETRIES = Counter(
+    "humisense_layer2_retries_total",
+    "Retry attempts made by the Layer 2 pipeline.",
+)
+
+L2_PROCESSING_LATENCY = Histogram(
+    "humisense_layer2_processing_latency_seconds",
+    "Wall-clock latency of processing one batch.",
+    buckets=(0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30),
+)
+
+L2_OUTBOX_PENDING = Gauge(
+    "humisense_layer2_outbox_pending",
+    "Outbox events awaiting publication.",
+)
+
+L2_OUTBOX_PUBLISHED = Counter(
+    "humisense_layer2_outbox_published_total",
+    "Outbox events published downstream.",
+)
+
+L2_OUTBOX_FAILED = Counter(
+    "humisense_layer2_outbox_failed_total",
+    "Outbox events that failed to publish.",
+)
+
+L2_QUEUE_LAG = Gauge(
+    "humisense_layer2_queue_lag_seconds",
+    "Age of the oldest unprocessed received record.",
+)
+
 
 class Metrics:
     """Thin wrapper that keeps tenant identifiers out of label values."""
@@ -133,3 +200,47 @@ class Metrics:
 
     def audit_write_failed(self) -> None:
         AUDIT_WRITE_FAILURES.inc()
+
+    # --- Layer 2 ----------------------------------------------------------
+
+    def layer2_received(self, *, count: int = 1) -> None:
+        if count:
+            L2_RECORDS_RECEIVED.inc(count)
+
+    def layer2_stored(self, *, data_family: str, count: int = 1) -> None:
+        if count:
+            L2_RECORDS_STORED.labels(data_family=data_family).inc(count)
+
+    def layer2_duplicate(self, *, count: int = 1) -> None:
+        if count:
+            L2_RECORDS_DUPLICATE.inc(count)
+
+    def layer2_quarantined(self, *, reason: str, count: int = 1) -> None:
+        if count:
+            L2_RECORDS_QUARANTINED.labels(reason=reason).inc(count)
+
+    def layer2_validation_failed(self, *, reason: str) -> None:
+        L2_VALIDATION_FAILURES.labels(reason=reason).inc()
+
+    def layer2_normalization_failed(self, *, reason: str) -> None:
+        L2_NORMALIZATION_FAILURES.labels(reason=reason).inc()
+
+    def layer2_retry(self) -> None:
+        L2_RETRIES.inc()
+
+    def layer2_batch_processed(self, *, duration_seconds: float) -> None:
+        L2_PROCESSING_LATENCY.observe(duration_seconds)
+
+    def layer2_outbox_pending(self, *, count: int) -> None:
+        L2_OUTBOX_PENDING.set(count)
+
+    def layer2_outbox_published(self, *, count: int = 1) -> None:
+        if count:
+            L2_OUTBOX_PUBLISHED.inc(count)
+
+    def layer2_outbox_failed(self, *, count: int = 1) -> None:
+        if count:
+            L2_OUTBOX_FAILED.inc(count)
+
+    def layer2_queue_lag(self, *, seconds: float) -> None:
+        L2_QUEUE_LAG.set(seconds)

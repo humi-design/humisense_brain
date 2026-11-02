@@ -10,6 +10,7 @@ backend, not by frontend visibility.
 
 - Architecture and threat model: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 - Canary Labs status and access requirements: [`docs/CANARY.md`](docs/CANARY.md)
+- Layer 2 (ingestion engine) design and release evidence: [`docs/LAYER2-ARCHITECTURE.md`](docs/LAYER2-ARCHITECTURE.md), [`docs/LAYER2-RELEASE.md`](docs/LAYER2-RELEASE.md)
 
 ## Status at a glance
 

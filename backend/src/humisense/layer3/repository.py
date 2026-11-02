@@ -39,6 +39,7 @@ from humisense.db.models import (
     ForecastResultRow,
     JobStatus,
     ModelRegistryRow,
+    Organization,
     TrendResultRow,
 )
 from humisense.db.session import Database
@@ -202,6 +203,17 @@ class AnalyticsRepository:
             )
 
     # --- Quality / readiness ---------------------------------------------
+
+    async def list_organization_ids(self) -> list[uuid.UUID]:
+        """Return every tenant id, for a background sweep.
+
+        This is the only read that crosses tenants, and it is used only by the worker's
+        scheduled loop, which then drains each tenant inside its own tenant-scoped session.
+        """
+        async with self._database.system_session() as session:
+            return list(
+                (await session.scalars(select(Organization.id).order_by(Organization.id))).all()
+            )
 
     async def list_quality_results(
         self,

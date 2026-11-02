@@ -157,6 +157,12 @@ processing by watermark (`feature_values.at` per entity/metric); bounded windows
 and per-tenant scoping; idempotent writes; checkpoint recovery via the job row; and retry with
 backoff using the existing Layer 1 retry policy.
 
+The scheduled path is `analytics_sweep_task` in `workers/worker.py`, which calls
+`AnalyticsEngine.run_sweep`. It is a no-op unless `layer3_sweep_enabled` is set, so detection
+does not run on a timer a deployment did not ask for. The sweep enumerates tenants, then runs
+each one inside its own tenant-scoped sessions; one tenant's failure is logged and does not
+stop the sweep.
+
 Nothing loads a whole historian into memory: a run reads a bounded window for one entity and
 one metric at a time, in tenant-scoped transactions.
 

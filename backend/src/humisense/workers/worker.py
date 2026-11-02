@@ -20,6 +20,7 @@ from arq.cron import cron
 
 from humisense.config import get_settings
 from humisense.container import build_container
+from humisense.db.models import JobStatus
 from humisense.logging_setup import configure_logging
 from humisense.observability.correlation import set_correlation_id
 
@@ -119,6 +120,29 @@ async def publish_outbox_task(ctx: dict[str, Any]) -> dict[str, int]:
     return {"published": result.published, "failed": result.failed, "skipped": result.skipped}
 
 
+async def analytics_sweep_task(ctx: dict[str, Any]) -> dict[str, int]:
+    """Periodic Layer 3 sweep: run the analytics pipeline for every tenant.
+
+    Disabled unless ``layer3_sweep_enabled`` is set, so a deployment that has not sized its
+    windows does not have detection running on a timer it did not ask for. Each tenant is
+    run inside its own tenant-scoped sessions, so the sweep cannot cross a tenant boundary,
+    and one tenant's failure does not stop the sweep.
+    """
+    container = ctx["container"]
+    if not container.settings.layer3_sweep_enabled:
+        return {"tenants": 0, "detections": 0, "skipped": 0}
+    results = await container.layer3_engine.run_sweep(correlation_id="layer3-sweep")
+    detections = sum(r.detections for r in results)
+    skipped = sum(1 for r in results if r.status == JobStatus.SKIPPED)
+    logger.info(
+        "layer3_sweep_finished",
+        tenants=len(results),
+        detections=detections,
+        skipped=skipped,
+    )
+    return {"tenants": len(results), "detections": detections, "skipped": skipped}
+
+
 class WorkerSettings:
     """arq worker configuration.
 
@@ -131,7 +155,12 @@ class WorkerSettings:
     class attributes.
     """
 
-    functions: ClassVar[list[Any]] = [run_sync_job, reap_stale_jobs_task, publish_outbox_task]
+    functions: ClassVar[list[Any]] = [
+        run_sync_job,
+        reap_stale_jobs_task,
+        publish_outbox_task,
+        analytics_sweep_task,
+    ]
     on_startup = startup
     on_shutdown = shutdown
 
@@ -149,4 +178,7 @@ class WorkerSettings:
         # Drain the Layer 2 outbox every minute so publication latency is bounded without
         # tying publication to request traffic.
         cron(publish_outbox_task, minute=set(range(60)), run_at_startup=True),
+        # The analytics sweep is a no-op unless enabled, so the schedule exists without
+        # imposing detection on a deployment that has not configured it.
+        cron(analytics_sweep_task, minute={5, 35}, run_at_startup=False),
     ]

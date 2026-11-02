@@ -77,6 +77,7 @@ async def _seed_series(
     step_seconds: int = 60,
     asset: str = "LINE-01",
     tag: str = "temperature",
+    base: datetime = BASE,
 ) -> uuid.UUID:
     """Seed one connection with a raw record and canonical record per value.
 
@@ -98,7 +99,7 @@ async def _seed_series(
         await session.flush()
         raws: list[tuple[uuid.UUID, str, float, datetime, dict[str, object]]] = []
         for index, value in enumerate(values):
-            at = BASE + timedelta(seconds=index * step_seconds)
+            at = base + timedelta(seconds=index * step_seconds)
             raw_id = uuid.uuid4()
             source_key = f"{asset}-{tag}-{at.isoformat()}"
             payload = {"asset_id": asset, "tag": tag, "value": value, "unit": "degC"}
@@ -271,3 +272,34 @@ async def test_execution_log_records_each_stage(
         )
     assert "select" in stages
     assert "persistence" in stages
+
+
+async def test_sweep_runs_every_tenant_and_isolates_them(
+    container: Container,
+    organization: uuid.UUID,
+    other_organization: uuid.UUID,
+) -> None:
+    """The sweep visits every tenant, and each tenant's detections stay its own."""
+    # The sweep uses the wall clock, so seed data ending near now rather than at BASE.
+    now = datetime.now(tz=UTC)
+    base = now - timedelta(minutes=21)
+    values = [60.0] * 20 + [140.0]
+    await _seed_series(container, organization, values=values, base=base)
+    engine = _engine(container)
+    results = await engine.run_sweep(correlation_id="sweep")
+    assert any(r.organization_id == organization for r in results)
+    assert any(r.organization_id == other_organization for r in results)
+    async with container.database.tenant_session(organization) as session:
+        own = await session.scalar(text("SELECT count(*) FROM detection_events"))
+    async with container.database.tenant_session(other_organization) as session:
+        other = await session.scalar(text("SELECT count(*) FROM detection_events"))
+    assert own >= 1
+    assert other == 0
+
+
+async def test_the_sweep_worker_task_is_a_no_op_when_disabled(container: Container) -> None:
+    from humisense.workers import worker as worker_module
+
+    container.settings.layer3_sweep_enabled = False
+    result = await worker_module.analytics_sweep_task({"container": container})
+    assert result == {"tenants": 0, "detections": 0, "skipped": 0}

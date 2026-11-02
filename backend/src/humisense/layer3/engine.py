@@ -129,6 +129,39 @@ class AnalyticsEngine:
 
     # --- Public entry points ---------------------------------------------
 
+    async def run_sweep(self, *, correlation_id: str) -> list[RunResult]:
+        """Run the full pipeline for every tenant over a bounded recent window.
+
+        The sweep is a background loop, so no single tenant is in scope. Each tenant is run
+        inside its own tenant-scoped sessions, which set the RLS GUC for that transaction
+        only: the loop cannot read or write across tenants even though it visits them in
+        sequence. One tenant's failure is recorded and does not stop the sweep.
+        """
+        organization_ids = await self._repository.list_organization_ids()
+        results: list[RunResult] = []
+        window_seconds = self._settings.layer3_sweep_window_seconds
+        row_limit = self._settings.layer3_sweep_row_limit
+        for organization_id in organization_ids:
+            window_end = datetime.now(tz=UTC)
+            try:
+                result = await self.run_full(
+                    organization_id,
+                    correlation_id=f"{correlation_id}:{organization_id}",
+                    since=window_end - timedelta(seconds=window_seconds),
+                    until=window_end,
+                    row_limit=row_limit,
+                    job_type="analytics_sweep",
+                )
+            except Exception as exc:  # noqa: BLE001 - one tenant must not stop the sweep
+                logger.error(
+                    "layer3_sweep_tenant_failed",
+                    organization_id=str(organization_id),
+                    error_type=type(exc).__name__,
+                )
+                continue
+            results.append(result)
+        return results
+
     async def run_full(
         self,
         organization_id: uuid.UUID,

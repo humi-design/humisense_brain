@@ -1,0 +1,24 @@
+# gitleaks configuration for Humisense Brain / OS.
+#
+# The default ruleset is kept in full. The allowlist is deliberately narrow: it matches
+# specific *values* that are provably synthetic test fixtures. It does not disable any
+# rule, and it does not exempt whole files or directories, so a real credential committed
+# anywhere — including in these same test files — is still reported.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic fixtures that exercise secret handling in the test suite."
+regexTarget = "secret"
+regexes = [
+  # Base64 of the 32-byte all-hex placeholder "0123456789abcdef0123456789abcdef".
+  # Used as the test master key; it is not a real key and decrypts nothing.
+  '''MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=''',
+  # Deliberately sequential credential shapes asserted to be scrubbed by the redactor.
+  '''glpat-abcdefghijklmnopqrst''',
+  '''ghp_abcdefghijklmnopqrst''',
+  '''xoxb-1234567890-abcdefghijkl''',
+  '''sk-abcdefghijklmnopqrstuvwxyz''',
+  '''eyJhbGciOiJIUzI1NiJ9\.abcdefgh\.ijklmnop''',
+]

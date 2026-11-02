@@ -58,6 +58,14 @@ npm run typecheck && npm run lint && npm test && npm run build
 - `npm run typecheck` must stay plain `tsc -b`. Passing `--noEmit false` overrides the
   config's `noEmit: true`, emits `.js` files next to the `.tsx` sources, and then breaks
   `npm run lint`.
+- The frontend needs Node 22.19 or newer. Vitest 5 declares `^22.12.0 || ^24.0.0`, and its
+  `undici` dependency declares `>=22.19.0`; on Node 20 the test worker fails to start with
+  `Cannot read properties of undefined (reading 'bind')` in
+  `undici/lib/interceptor/decompress.js`, and the suite reports "no tests" rather than a
+  failure in the code under test.
+- gitleaks reads `.gitleaks.toml` automatically. The config keeps the default ruleset and
+  allows only specific synthetic fixture values, matched on the secret itself (not by file
+  or path), so a real credential committed in the same test files is still reported.
 
 ## Conventions
 

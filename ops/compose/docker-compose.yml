@@ -221,6 +221,10 @@ services:
       AUTH_MODE: ${AUTH_MODE:-oidc}
       OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:?set OIDC_AUDIENCE}
+      # The worker shares the production configuration validator, which requires an
+      # explicit https CORS allowlist even though the worker serves no HTTP. It is
+      # supplied so the same gate passes for both processes.
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
       SECRETS_PROVIDER: ${SECRETS_PROVIDER:-encrypted_db}
       SECRETS_MASTER_KEY: ${SECRETS_MASTER_KEY:?set SECRETS_MASTER_KEY}
@@ -245,6 +249,15 @@ services:
       - uploads:/app/var/uploads
       - ../../data/synthetic:/app/data/synthetic:ro
       - db-tls:/etc/ssl/humisense:ro
+    # The worker serves no HTTP, so the API image's healthcheck (a request to
+    # /api/v1/health/ready) would always fail. arq's own health check reads the sentinel
+    # the worker writes to Redis, which is the signal that it is actually processing.
+    healthcheck:
+      test: ["CMD", "arq", "humisense.workers.worker.WorkerSettings", "--check"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     # The worker's arq process exits on SIGTERM and finishes the current job.
     stop_grace_period: 60s
     deploy:

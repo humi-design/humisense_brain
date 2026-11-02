@@ -15,6 +15,8 @@ import uuid
 from typing import Any, ClassVar
 
 import structlog
+from arq.connections import RedisSettings
+from arq.cron import cron
 
 from humisense.config import get_settings
 from humisense.container import build_container
@@ -99,7 +101,16 @@ async def reap_stale_jobs_task(ctx: dict[str, Any]) -> int:
 
 
 class WorkerSettings:
-    """arq worker configuration."""
+    """arq worker configuration.
+
+    Every setting is a class attribute, not an instance attribute. arq reads settings from
+    ``settings_cls.__dict__`` (``arq.worker.get_kwargs``), which for a class contains only
+    the class attributes; attributes assigned in ``__init__`` live on the instance and are
+    silently ignored. ``redis_settings`` set in ``__init__`` was therefore dropped and the
+    worker connected to arq's default ``localhost:6379`` instead of the configured broker,
+    and the cron job never ran. The values are resolved here, at import time, so they are
+    class attributes.
+    """
 
     functions: ClassVar[list[Any]] = [run_sync_job, reap_stale_jobs_task]
     on_startup = startup
@@ -112,16 +123,8 @@ class WorkerSettings:
     keep_result = 3600
     health_check_interval = 30
 
-    @staticmethod
-    def _settings() -> Any:
-        return get_settings()
-
-    def __init__(self) -> None:
-        settings = get_settings()
-        from arq.connections import RedisSettings
-
-        self.redis_settings = RedisSettings.from_dsn(settings.redis_url)
-        from arq.cron import cron
-
-        # Instance attributes, not ClassVars: arq reads them off the instance.
-        self.cron_jobs = [cron(reap_stale_jobs_task, minute={0, 30}, run_at_startup=False)]
+    _settings = get_settings()
+    redis_settings = RedisSettings.from_dsn(_settings.redis_url)
+    cron_jobs: ClassVar[list[Any]] = [
+        cron(reap_stale_jobs_task, minute={0, 30}, run_at_startup=False)
+    ]

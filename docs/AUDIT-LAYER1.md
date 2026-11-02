@@ -23,16 +23,19 @@ were all verified against a live stack, not merely observed in tests.
 The gaps that exist are **honesty and finishing gaps, not architecture gaps**: the
 documentation claimed test files, tooling, and controls that did not exist; a performance
 defect made a full CSV sync quadratic in the row count; the documented quick start did not
-work from the documented directory; the egress policy was exposed to DNS rebinding; and
-there was no deployment artifact. All are now fixed except the supply-chain tooling and
+work from the documented directory; the egress policy was exposed to DNS rebinding; there
+was no deployment artifact; and the background worker never actually started because it
+ignored its configured broker (F11). All are now fixed except the supply-chain tooling and
 frontend-coverage items tracked in section 7.
 
-**Recommendation**: proceed as a production-readiness candidate for a controlled,
-single-tenant pilot. F5 (egress DNS rebinding) and F7 (deployment artifacts) are now
-closed, and the deployment gate requires verified database TLS that is enforced on the
-connection, not merely checked at startup. Do **not** onboard multi-tenant enterprise data
-until F4 (supply-chain tooling), F8 (frontend tests), and F9 (rate limiter fail-open) are
-addressed and a third-party penetration test has been performed.
+**Recommendation**: approved as a release candidate for a controlled, single-tenant pilot.
+Every claim above is reproduced against the running stack, not inferred. F5 (egress DNS
+rebinding), F6 (metrics), F7 (deployment artifacts), and F11 (worker startup) are closed,
+the deployment gate requires verified database TLS that is enforced on the connection
+rather than merely checked at startup, and the full stack boots clean from empty volumes
+with all five services healthy. Do **not** onboard multi-tenant enterprise data until F4
+(supply-chain tooling), F8 (frontend tests), and F9 (rate limiter fail-open) are addressed
+and a third-party penetration test has been performed.
 
 ## 2. Evidence gathered (reproduced, not assumed)
 
@@ -42,13 +45,18 @@ applied. Findings were then reproduced against the live system.
 
 | Area | Verification | Result |
 | --- | --- | --- |
-| Test suite | `uv run pytest` against real Postgres/Redis | 417 passed |
-| Lint / format | `ruff check`, `ruff format --check` | clean, 77 files |
-| Types | `mypy src` | clean, 58 files |
+| Test suite | `uv run pytest` against real Postgres/Redis | 465 passed |
+| Lint / format | `ruff check`, `ruff format --check` | clean, 81 files |
+| Types | `mypy src` | clean, 60 files |
 | SAST | `bandit -c pyproject.toml -r src` | 0 issues |
 | Dependencies | `pip-audit` | no known vulnerabilities |
 | Frontend | `tsc -b`, `eslint`, `vitest`, `vite build` | all green, 8 tests |
 | Secret scan | `gitleaks` over history | no leaks |
+| Deployment | `docker compose up -d` from empty volumes | all 5 services healthy |
+| Production gate | `cli release-check` inside the production image | accepted |
+| Database TLS | `pg_stat_ssl` for the app connection | `t\|TLSv1.3\|TLS_AES_256_GCM_SHA384` |
+| TLS verification | untrusted CA, then hostname mismatch | both refused (`CERTIFICATE_VERIFY_FAILED`) |
+| Metrics | `GET /api/v1/metrics` anonymous | 401 |
 | Tenant isolation | live cross-tenant requests | 404 on foreign objects, empty lists, no existence disclosure |
 | CSRF | live write without / with wrong token | 403 |
 | Privilege | viewer role writes / reads | 403 / 200 |
@@ -74,6 +82,7 @@ applied. Findings were then reproduced against the live system.
 | F8 | Low | Frontend test coverage is one file (API client); no component or page tests | Open |
 | F9 | Low | Rate limiter fails open to a per-process in-memory backend when Redis is unavailable | Documented; accepted for now |
 | F10 | Info | No pull-request template in the repository | Open |
+| F11 | High | The arq worker ignored its configured Redis broker and never started: `redis_settings` and `cron_jobs` were set in `__init__`, which arq's `get_kwargs` does not read | **Fixed** |
 
 Severity reflects impact on a production deployment, not effort to fix.
 
@@ -257,6 +266,38 @@ covered by `test_limiter_falls_back_when_the_backend_fails`.
 The repository has no `.github/PULL_REQUEST_TEMPLATE`. Nothing enforces a review checklist
 for changes that touch the security boundary.
 
+### F11 — The worker never started (High) — fixed
+
+Found only by booting the deployment stack from empty volumes. The worker container
+crash-looped with `redis.exceptions.ConnectionError: ... connecting to localhost:6379`,
+even though its environment set `REDIS_URL=redis://...@redis:6379/0`.
+
+Root cause: `arq` resolves worker configuration from the *class* `__dict__`
+(`arq.worker.get_kwargs` returns `settings_cls.__dict__`), so it sees only class
+attributes. `WorkerSettings` assigned `redis_settings` and `cron_jobs` in `__init__`, which
+places them on the instance; arq never read them. The worker therefore fell back to arq's
+default broker (`localhost:6379`), never connected, and its stale-job reaper cron never
+ran. Synchronization jobs would have sat in the queue forever.
+
+This is a High finding because it is a silent, complete loss of the background-sync
+functionality that Layer 1 exists to provide, and it was invisible to the test suite: every
+test constructs the container directly and never exercises arq's settings resolution.
+
+The fix moves both values to class attributes, resolved at import time. A regression test
+now asserts what arq actually resolves — `get_kwargs(WorkerSettings)` contains
+`redis_settings` and `cron_jobs`, and the broker equals `RedisSettings.from_dsn` of the
+configured URL — so the defect cannot return silently.
+
+Two further defects were found and fixed while verifying the worker against the running
+stack:
+
+- The worker shares the production configuration validator, which requires an explicit
+  https `cors_origins` allowlist even though the worker serves no HTTP. The compose worker
+  service now supplies `CORS_ORIGINS`, so the same gate passes for both processes.
+- The worker inherited the API image's HTTP healthcheck (a request to
+  `/api/v1/health/ready`), which can never pass for a process that serves no HTTP. The
+  worker now uses arq's own `--check`, which reads the sentinel the worker writes to Redis.
+
 ## 5. Verified strengths
 
 These were confirmed by independent reproduction, not by reading tests.
@@ -307,20 +348,22 @@ These were confirmed by independent reproduction, not by reading tests.
    resolution and asserts the pin holds.
 2. F7: **closed.** Container builds and a compose file exist; the images run as non-root
    and are now a target for image scanning.
-3. F10: add a pull-request template with an explicit security-boundary checklist.
+3. F11: **closed.** The worker now starts against the configured broker; the regression
+   test asserts what arq resolves rather than what the class defines.
+4. F10: add a pull-request template with an explicit security-boundary checklist.
 
 **P2 — before multi-tenant enterprise data**
-4. F4: add `semgrep` and SBOM generation to CI; add image scanning (the F7 images are now a
+5. F4: add `semgrep` and SBOM generation to CI; add image scanning (the F7 images are now a
    target).
-5. F6: **closed.** Metrics are exposed on an authenticated endpoint gated by `metrics:read`
+6. F6: **closed.** Metrics are exposed on an authenticated endpoint gated by `metrics:read`
    and by `settings.metrics_enabled`.
-6. F9: alert on `rate_limit_degraded`, and document the fail-open behaviour as accepted.
-7. Commission the third-party penetration test the docs already promise.
+7. F9: alert on `rate_limit_degraded`, and document the fail-open behaviour as accepted.
+8. Commission the third-party penetration test the docs already promise.
 
 **P3 — hygiene**
-8. F8: add tests for the frontend presentation helpers and the auth/CSRF client paths.
-9. Keep the documentation-to-code reference check that this audit ran; wire it into CI so
-   a cited-but-missing test file fails the build.
+9. F8: add tests for the frontend presentation helpers and the auth/CSRF client paths.
+10. Keep the documentation-to-code reference check that this audit ran; wire it into CI so
+    a cited-but-missing test file fails the build.
 
 ## 8. Change log for this audit
 
@@ -345,3 +388,13 @@ Fixes are in this change set; each carries a regression test.
 - Database TLS enforcement: `backend/src/humisense/config.py` (`database_connect_args`,
   `database_tls_ca_path`), `backend/src/humisense/db/session.py`,
   `backend/alembic/env.py`; tests in `backend/tests/test_config_hardening.py`.
+- F11: `backend/src/humisense/workers/worker.py` — move `redis_settings` and `cron_jobs`
+  to class attributes; regression tests in `backend/tests/test_worker.py`. The worker
+  healthcheck and the missing `CORS_ORIGINS` in the worker service are fixed in
+  `ops/compose/docker-compose.yml`.
+- Release gate: `backend/src/humisense/devtools/cli.py` (`release-check`, the first caller
+  of `Settings.require_production_ready`); tests in `backend/tests/test_config_hardening.py`.
+- Deployment documentation: `docs/DEPLOYMENT.md` (new), referenced by the compose file and
+  the environment template.
+- CI: `.github/workflows/ci.yml` — validate the reference compose stack renders and the
+  committed compose environment template contains placeholders only.

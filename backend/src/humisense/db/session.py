@@ -37,6 +37,9 @@ class Database:
             pool_size=settings.database_pool_size,
             max_overflow=settings.database_max_overflow,
             pool_pre_ping=True,
+            # TLS is enforced here, not only at startup: database_require_tls decides
+            # whether asyncpg establishes and verifies a TLS connection.
+            connect_args=settings.database_connect_args,
             # Server-side prepared statement caching is left at the asyncpg default;
             # it is safe here because we never use PgBouncer in transaction mode.
             echo=False,

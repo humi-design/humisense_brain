@@ -193,6 +193,12 @@ class EgressPolicy:
             # by the address check. This is the documented default posture.
             pass
 
+        if not self._port_allowed(port, host_is_allowlisted):
+            raise EgressBlockedError(
+                detail="Destination port is not permitted by the outbound network policy",
+                context={"port": port},
+            )
+
         addresses = self._resolve(hostname)
 
         for raw_address in addresses:
@@ -211,6 +217,58 @@ class EgressPolicy:
             port=port,
             resolved_addresses=tuple(addresses),
         )
+
+    def resolve_for_connection(self, hostname: str, port: int) -> tuple[str, ...]:
+        """Re-validate ``hostname`` and return the addresses a connection may target.
+
+        This is the connection-time half of the policy. It is called by the pinned
+        transport for every TCP connection, using the hostname ``httpcore`` is about to
+        connect to, so a DNS answer that changes between the URL check and the connection
+        is caught here. The returned literals are the only addresses the transport may
+        connect to; a mixed or blocked answer raises rather than partially connecting.
+
+        The address identity is re-established here, which is what a second DNS lookup
+        could subvert; the port is re-checked as well so a connection to an unexpected port
+        cannot slip through.
+
+        Raises:
+            EgressBlockedError: when the host, port, or any resolved address is not
+                permitted.
+        """
+        if not isinstance(hostname, str) or not hostname.strip():
+            raise EgressBlockedError(detail="A destination host is required")
+        if any(ch in hostname for ch in ("\n", "\r", "\x00", " ")):
+            raise EgressBlockedError(detail="Destination host contains control characters")
+
+        host = hostname.lower().rstrip(".")
+        if host in BLOCKED_HOSTNAMES:
+            raise EgressBlockedError(detail="Destination host is a known metadata endpoint")
+
+        host_is_allowlisted = self._host_allowlisted(host)
+        if not self._port_allowed(port, host_is_allowlisted):
+            raise EgressBlockedError(
+                detail="Destination port is not permitted by the outbound network policy",
+                context={"port": port},
+            )
+        addresses = self._resolve(host)
+        for raw_address in addresses:
+            address = ipaddress.ip_address(raw_address)
+            if self._address_allowed(address, host_is_allowlisted):
+                continue
+            raise EgressBlockedError(
+                detail="Destination resolves to an address that is not permitted",
+                context={"address_class": _address_class(address)},
+            )
+        return tuple(addresses)
+
+    def _port_allowed(self, port: int, host_is_allowlisted: bool) -> bool:
+        """Return True when the port may be contacted.
+
+        Only the standard web ports are permitted by default. An explicitly allowlisted
+        host may use any port, which is how a documented internal integration on a
+        non-standard port is expressed without weakening the default posture.
+        """
+        return port in DEFAULT_ALLOWED_PORTS or host_is_allowlisted
 
     def _host_allowlisted(self, hostname: str) -> bool:
         if hostname in self._allowed_hosts:

@@ -35,6 +35,7 @@ from humisense.errors import (
     is_retryable,
 )
 from humisense.security.egress import EgressPolicy
+from humisense.security.pinned_transport import PinnedAsyncHTTPTransport
 
 logger = structlog.get_logger(__name__)
 
@@ -189,7 +190,16 @@ class HttpIngestionSink:
 
     def _client_or_create(self) -> httpx.AsyncClient:
         if self._client is None:
+            # The transport connects only to addresses the egress policy validated at
+            # connection time, so a DNS answer that changes between the URL check and the
+            # connect cannot redirect the request to an internal host (see
+            # ``humisense.security.pinned_transport``).
+            transport = PinnedAsyncHTTPTransport(
+                policy=self._egress,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
             self._client = httpx.AsyncClient(
+                transport=transport,
                 timeout=httpx.Timeout(
                     connect=self._egress.connect_timeout,
                     read=self._timeout,
@@ -197,7 +207,10 @@ class HttpIngestionSink:
                     pool=self._timeout,
                 ),
                 follow_redirects=False,
-                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+                # Ignore proxy/CA settings from the environment. A proxy discovered
+                # through HTTP_PROXY would otherwise become a second, unpinned path to the
+                # destination, which defeats the transport's whole purpose.
+                trust_env=False,
             )
         return self._client
 

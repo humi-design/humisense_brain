@@ -7,6 +7,8 @@ than start with one. These tests assert that each unsafe combination is rejected
 from __future__ import annotations
 
 import base64
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -349,3 +351,102 @@ def test_a_short_session_secret_is_still_rejected() -> None:
     """Empty is treated as unset; a real but weak value is still refused."""
     with pytest.raises(ValidationError):
         Settings(_env_file=None, session_secret="too-short")
+
+
+def test_relative_csv_roots_are_anchored_to_the_repository_root() -> None:
+    """A relative CSV root must not depend on the process working directory.
+
+    Regression: the default was ``./data/synthetic`` and the documented quick start runs
+    commands from ``backend/``, so the root resolved to ``backend/data/synthetic`` and the
+    CSV connector failed closed (``doctor`` reported a PathNotAllowedError).
+    """
+    default = Settings(_env_file=None).csv_allowed_roots
+    assert len(default) == 1
+    assert Path(default[0]).is_absolute()
+    assert default[0].endswith("data/synthetic")
+    assert Path(default[0]).is_dir()
+
+    relative = Settings(_env_file=None, csv_allowed_roots=("./data/synthetic",)).csv_allowed_roots
+    assert relative == default
+
+
+def test_absolute_csv_roots_are_left_unchanged() -> None:
+    """An absolute root is authoritative and must not be rewritten."""
+    settings = Settings(_env_file=None, csv_allowed_roots=("/srv/humisense/data",))
+    assert settings.csv_allowed_roots == ("/srv/humisense/data",)
+
+
+def test_plaintext_database_connections_have_no_tls_arguments() -> None:
+    """Without the TLS requirement, no TLS argument is forced on the driver."""
+    settings = Settings(_env_file=None, database_require_tls=False)
+    assert settings.database_connect_args == {}
+
+
+def test_required_tls_verifies_the_server_certificate() -> None:
+    """``database_require_tls`` must be enforced, not only checked at startup.
+
+    Regression: the flag gated startup but nothing passed a TLS context to asyncpg, so a
+    "production-ready" deployment still connected in plaintext.
+    """
+    import ssl
+
+    settings = Settings(_env_file=None, database_require_tls=True)
+    args = settings.database_connect_args
+    context = args["ssl"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_required_tls_uses_the_configured_ca_bundle(tmp_path: Path) -> None:
+    """An explicit CA path must be loaded into the verification context."""
+    import ssl
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test-ca")])
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime(2020, 1, 1, tzinfo=UTC))
+        .not_valid_after(datetime(2040, 1, 1, tzinfo=UTC))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    ca_file = tmp_path / "ca.crt"
+    ca_file.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+
+    settings = Settings(
+        _env_file=None,
+        database_require_tls=True,
+        database_tls_ca_path=str(ca_file),
+    )
+    context = settings.database_connect_args["ssl"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+
+
+async def test_release_check_refuses_a_development_configuration() -> None:
+    """The release gate must refuse a development configuration relabelled as production.
+
+    ``validate_for_production`` alone would accept this; ``require_production_ready``,
+    which the ``release-check`` command calls, must not.
+    """
+    from humisense.devtools.cli import command_release_check
+
+    exit_code = await command_release_check(Settings(app_env="test", auth_mode="dev"))
+    assert exit_code == 1
+
+
+async def test_release_check_accepts_a_production_configuration() -> None:
+    from humisense.devtools.cli import command_release_check
+
+    exit_code = await command_release_check(production())
+    assert exit_code == 0

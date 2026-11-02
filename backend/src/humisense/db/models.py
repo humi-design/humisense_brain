@@ -2,7 +2,7 @@
 
 Every tenant-owned table carries ``organization_id``. PostgreSQL Row-Level Security
 policies reference that column, so isolation holds even if an application-level filter
-is forgotten. See :mod:`humisense.db.tenancy` for how tenant context is established.
+is forgotten. See :mod:`humisense.db.rls` for how tenant context is established.
 """
 
 from __future__ import annotations

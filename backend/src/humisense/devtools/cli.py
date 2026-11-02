@@ -5,6 +5,7 @@ Commands:
 * ``seed``   — create a development organization, users, and memberships.
 * ``demo``   — create a CSV connection for the synthetic historian fixture.
 * ``doctor`` — check configuration, database, RLS, and connector availability.
+* ``release-check`` — refuse to release unless the configuration is production-ready.
 
 Every command refuses to run destructive work in production unless an explicit
 acknowledgement flag is supplied, so an operator cannot reset a production database by
@@ -145,7 +146,10 @@ async def command_demo(settings: Settings) -> int:
 
     fixture = Path(settings.csv_allowed_roots[0]) / "synthetic_historian.csv"
     if not fixture.exists():
-        print(f"fixture not found at {fixture}; run tools/generate_fixtures.py first")
+        print(
+            f"fixture not found at {fixture}; the committed synthetic fixture lives at "
+            "data/synthetic/synthetic_historian.csv in a source checkout"
+        )
         return 2
 
     container = build_container(settings)
@@ -261,6 +265,33 @@ async def command_doctor(settings: Settings) -> int:
     return 0 if problems == 0 else 1
 
 
+async def command_release_check(settings: Settings) -> int:
+    """Refuse to release unless the configuration is fit for production.
+
+    This is the caller :meth:`Settings.require_production_ready` documents but did not
+    have. It is deliberately not :meth:`validate_for_production`: that gate only refuses a
+    configuration that is unsafe *given* it claims production, so a development
+    configuration relabelled as production would pass it. This command refuses a
+    configuration that is merely not production-grade, which is what a release step needs.
+
+    It reads configuration only. It does not open a database connection and does not print
+    any secret, so it is safe to run in a build pipeline with production values present.
+    """
+    print(f"environment: {settings.app_env}")
+    print(f"auth mode:   {settings.auth_mode}")
+    print(f"secrets:     {settings.secrets_provider}")
+    print(f"layer2:      {settings.layer2_mode}")
+    print(f"queue:       {settings.task_queue_mode}")
+    try:
+        settings.require_production_ready()
+    except Exception as exc:  # noqa: BLE001 - reported, not raised
+        print(f"release-check: REFUSED ({type(exc).__name__})")
+        print(f"  detail: {getattr(exc, 'detail', '')}")
+        return 1
+    print("release-check: ok (configuration is production-ready)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="humisense",
@@ -270,6 +301,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("seed", help="create development organizations, users, and memberships")
     sub.add_parser("demo", help="create a CSV connection for the synthetic fixture")
     sub.add_parser("doctor", help="check configuration and dependencies")
+    sub.add_parser(
+        "release-check",
+        help="refuse to release unless the configuration is production-ready",
+    )
     return parser
 
 
@@ -283,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         "seed": command_seed,
         "demo": command_demo,
         "doctor": command_doctor,
+        "release-check": command_release_check,
     }
     handler = handlers[args.command]
     return int(asyncio.run(handler(settings)))

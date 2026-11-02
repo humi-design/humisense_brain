@@ -230,3 +230,49 @@ jobs:
             echo "-- checking $f"
             test -s "$f"
           done
+
+      - name: Validate the reference compose stack renders
+        run: |
+          # `docker compose config` parses and interpolates the file without starting
+          # anything, so this catches a broken YAML structure, a missing required
+          # variable, or an unresolved reference. The committed .env.example supplies
+          # every required value as a placeholder.
+          docker compose --env-file ops/compose/.env.example \
+            -f ops/compose/docker-compose.yml config >/dev/null
+          echo "compose stack renders"
+
+      - name: Validate the committed compose environment template has placeholders only
+        run: |
+          # Same intent as the backend .env.example check above: the template is
+          # committed, so no value in it may be a real credential. Every CHANGE-ME value
+          # is a placeholder by construction.
+          python3 - <<'PY'
+          import re, sys
+
+          text = open("ops/compose/.env.example", encoding="utf-8").read()
+          values = dict(re.findall(r"^([A-Z_]+)=(.*)$", text, re.MULTILINE))
+
+          # Names whose value is a credential and therefore must carry a placeholder marker.
+          # OIDC_AUDIENCE is deliberately excluded: it is a public identifier, not a secret.
+          SECRET_NAMES = (
+              "POSTGRES_SUPERUSER_PASSWORD",
+              "HUMISENSE_APP_PASSWORD",
+              "REDIS_PASSWORD",
+              "SESSION_SECRET",
+              "SECRETS_MASTER_KEY",
+          )
+
+          problems = []
+          for name in SECRET_NAMES:
+              value = values.get(name)
+              if value is None:
+                  problems.append(f"{name} is missing from the template")
+              elif "CHANGE-ME" not in value:
+                  problems.append(f"{name} does not carry the CHANGE-ME placeholder marker")
+
+          if problems:
+              for p in problems:
+                  print(f"::error::ops/compose/.env.example: {p}")
+              sys.exit(1)
+          print("compose environment template contains placeholders only")
+          PY

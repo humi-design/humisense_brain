@@ -59,7 +59,13 @@ async def run_migrations_online() -> None:
     # Build the engine from the unwrapped DSN rather than writing it into the alembic
     # Config: configparser treats '%' as interpolation syntax, so a URL-encoded password
     # would either fail or be silently mangled.
-    connectable = create_async_engine(database_dsn, poolclass=pool.NullPool)
+    # TLS is enforced for migrations too, so schema changes are not the one path that
+    # reaches the database in plaintext when database_require_tls is set.
+    connectable = create_async_engine(
+        database_dsn,
+        poolclass=pool.NullPool,
+        connect_args=settings.database_connect_args,
+    )
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()

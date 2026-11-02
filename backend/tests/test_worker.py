@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from humisense.config import get_settings
 from humisense.connectors.base import get_manifest
 from humisense.container import build_container
 from humisense.services.connections import ConnectionDraft
@@ -103,6 +104,32 @@ def test_the_worker_registers_the_functions_arq_must_find() -> None:
 
     assert "run_sync_job" in names
     assert "reap_stale_jobs_task" in names
+
+
+def test_the_worker_settings_survive_arq_resolution() -> None:
+    """arq reads settings from the class __dict__, so instance attributes are dropped.
+
+    ``arq.worker.get_kwargs`` collects ``settings_cls.__dict__``, which for a class holds
+    only class attributes. A ``redis_settings`` assigned in ``__init__`` is invisible to it,
+    so the worker silently falls back to arq's default broker (``localhost:6379``) and the
+    cron job never runs. This asserts the settings arq actually resolves.
+    """
+    from arq.worker import get_kwargs
+
+    resolved = get_kwargs(worker_module.WorkerSettings)
+
+    assert "redis_settings" in resolved, "arq would ignore the configured broker"
+    assert "cron_jobs" in resolved, "arq would ignore the stale-job reaper"
+
+
+def test_the_worker_broker_matches_the_configured_redis_url() -> None:
+    """The resolved broker must be the configured one, not arq's localhost default."""
+    from arq.connections import RedisSettings
+
+    settings = get_settings()
+    expected = RedisSettings.from_dsn(settings.redis_url)
+
+    assert worker_module.WorkerSettings.redis_settings == expected
 
 
 def test_the_csv_connector_advertises_only_implemented_capabilities() -> None:

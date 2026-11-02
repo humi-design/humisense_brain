@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import ssl as ssl_module
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -18,6 +20,13 @@ from humisense.errors import ConfigurationError
 
 DEFAULT_DEV_SESSION_SECRET = "dev-only-insecure-session-secret-change-me"
 MIN_SECRET_LENGTH = 32
+
+# The repository root, three levels above this file (backend/src/humisense/config.py).
+# Relative defaults are anchored here rather than to the process working directory, so a
+# documented command works no matter which directory it is run from. A source checkout is
+# the only layout that has committed development data; an installed package must set an
+# absolute CSV_ALLOWED_ROOTS, which production validation already requires to be explicit.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -56,6 +65,8 @@ class Settings(BaseSettings):
     database_statement_timeout_ms: int = 30_000
     database_require_tls: bool = False
     """Required in production: refuses to run against a database reached in plaintext."""
+    database_tls_ca_path: str | None = None
+    """CA bundle used to verify the database's TLS certificate when TLS is required."""
 
     # --- Redis ------------------------------------------------------------
     redis_url: str = "redis://localhost:6379/0"
@@ -111,7 +122,7 @@ class Settings(BaseSettings):
     egress_max_redirects: int = 2
 
     # --- Connector limits -------------------------------------------------
-    csv_allowed_roots: Annotated[tuple[str, ...], NoDecode] = ("./data/synthetic",)
+    csv_allowed_roots: Annotated[tuple[str, ...], NoDecode] = ("data/synthetic",)
     csv_max_file_bytes: int = 64 * 1024 * 1024
     csv_max_rows: int = 1_000_000
     csv_max_processing_seconds: float = 120.0
@@ -162,6 +173,24 @@ class Settings(BaseSettings):
             return tuple(part.strip() for part in stripped.split(",") if part.strip())
         return value
 
+    @field_validator("csv_allowed_roots", mode="after")
+    @classmethod
+    def _anchor_relative_roots(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Anchor relative roots to the repository root, not the working directory.
+
+        The committed default (``data/synthetic``) and the documented quick start both
+        run commands from ``backend/``, so a working-directory-relative default resolved
+        to ``backend/data/synthetic`` and the CSV connector failed closed. Anchoring to
+        the repository root makes the documented commands work from any directory.
+        """
+        anchored: list[str] = []
+        for root in value:
+            candidate = Path(root).expanduser()
+            if not candidate.is_absolute():
+                candidate = _REPOSITORY_ROOT / candidate
+            anchored.append(str(candidate))
+        return tuple(anchored)
+
     @field_validator("oidc_algorithms", mode="before")
     @classmethod
     def _split_algorithms(cls, value: object) -> object:
@@ -184,6 +213,30 @@ class Settings(BaseSettings):
     def database_dsn(self) -> str:
         """The database URL, unwrapped. Call this at the point of use, never log it."""
         return self.database_url.get_secret_value()
+
+    @property
+    def database_connect_args(self) -> dict[str, object]:
+        """asyncpg connection arguments derived from the TLS configuration.
+
+        ``database_require_tls`` is a startup requirement, so it must also be *enforced*:
+        without this the flag would only gate startup while the connection stayed in
+        plaintext. When TLS is required, an ``ssl.SSLContext`` is built that verifies the
+        server certificate and its hostname. The certificate is verified against
+        ``database_tls_ca_path`` when one is given, and against the system trust store
+        otherwise.
+
+        Called at the point of engine construction, never logged.
+        """
+        if not self.database_require_tls:
+            return {}
+        context = ssl_module.create_default_context()
+        # create_default_context already sets check_hostname and CERT_REQUIRED; stating
+        # them keeps the guarantee visible if the helper's defaults ever change.
+        context.check_hostname = True
+        context.verify_mode = ssl_module.CERT_REQUIRED
+        if self.database_tls_ca_path:
+            context.load_verify_locations(cafile=self.database_tls_ca_path)
+        return {"ssl": context}
 
     @property
     def session_secret_value(self) -> str:

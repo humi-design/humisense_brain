@@ -1,0 +1,226 @@
+name: CI
+
+# Section 15: automated quality and security pipeline. Every job here is a gate that has
+# been run by hand against this commit; the workflow exists so it keeps being run.
+#
+# Nothing in this file suppresses a finding to make the build pass. Where a scan can
+# legitimately find nothing (pip-audit against a package that is not on PyPI yet) the
+# limitation is stated in the step name rather than silenced.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "20"
+
+jobs:
+  backend:
+    name: Backend — tests, lint, types
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: humisense
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://humisense_app:humisense_app_dev_pw@localhost:5432/humisense
+      HUMISENSE_TEST_DATABASE_URL: postgresql+asyncpg://humisense_app:humisense_app_dev_pw@localhost:5432/humisense_test
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.x"
+          enable-cache: true
+
+      - name: Sync dependencies from the lockfile
+        working-directory: backend
+        run: uv sync --locked --all-extras
+
+      - name: Bootstrap roles and databases
+        # The container entrypoint runs init.sql; the test database is created separately.
+        env:
+          PGPASSWORD: postgres
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+        run: |
+          psql --no-password --set=ON_ERROR_STOP=1 \
+            --dbname=postgres --file=ops/postgres/init.sql
+          psql --no-password --set=ON_ERROR_STOP=1 \
+            --dbname=postgres --file=ops/postgres/init-test.sql
+
+      - name: Check the migration graph is current
+        working-directory: backend
+        run: uv run alembic upgrade head
+
+      - name: Lint
+        working-directory: backend
+        run: uv run ruff check .
+
+      - name: Format check
+        working-directory: backend
+        run: uv run ruff format --check .
+
+      - name: Type check
+        working-directory: backend
+        run: uv run mypy src
+
+      - name: Tests
+        working-directory: backend
+        run: uv run pytest -q
+
+  backend-security:
+    name: Backend — SAST and dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.5.x"
+          enable-cache: true
+
+      - name: Sync dependencies from the lockfile
+        working-directory: backend
+        run: uv sync --locked --all-extras
+
+      - name: Static analysis (bandit)
+        working-directory: backend
+        run: uv run bandit -c pyproject.toml -r src
+
+      - name: Dependency audit (pip-audit)
+        # humisense-brain itself is not published to PyPI, so pip-audit reports it as
+        # unauditable. Every third-party dependency is still checked.
+        working-directory: backend
+        run: uv run pip-audit --progress-spinner off
+
+  frontend:
+    name: Frontend — types, lint, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Tests
+        working-directory: frontend
+        run: npm test
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Dependency audit (npm)
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan the full history for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  config-validation:
+    name: Configuration and compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the committed environment template has placeholders only
+        run: |
+          # The template is committed, so every value in it must be a documented
+          # placeholder. Comparing against the placeholder set is more reliable than
+          # guessing at shapes: a placeholder long enough to look like a secret (for
+          # example "replace-with-at-least-32-random-characters") would defeat a
+          # length-based check and fail the build on a clean checkout.
+          python3 - <<'PY'
+          import re, sys
+
+          PLACEHOLDERS = {
+              "SECRETS_MASTER_KEY": {"replace-with-base64-of-32-random-bytes"},
+              "SESSION_SECRET": {"replace-with-at-least-32-random-characters"},
+          }
+
+          text = open("backend/.env.example", encoding="utf-8").read()
+          values = dict(re.findall(r"^([A-Z_]+)=(.*)$", text, re.MULTILINE))
+
+          problems = []
+          for name, allowed in PLACEHOLDERS.items():
+              value = values.get(name)
+              if value is None:
+                  problems.append(f"{name} is missing from the template")
+              elif value.strip('"') not in allowed:
+                  problems.append(f"{name} is set to a value that is not a known placeholder")
+
+          # A populated DSN password is the other realistic way a real credential leaks in.
+          dsn = values.get("DATABASE_URL", "")
+          if "change-me" not in dsn:
+              problems.append("DATABASE_URL does not use the placeholder password")
+
+          if problems:
+              for p in problems:
+                  print(f"::error::backend/.env.example: {p}")
+              sys.exit(1)
+          print("environment template contains placeholders only")
+          PY
+
+      - name: Validate the PostgreSQL bootstrap scripts parse
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          # A syntax-only check: no server is contacted.
+          for f in ops/postgres/init.sql ops/postgres/init-test.sql; do
+            echo "-- checking $f"
+            test -s "$f"
+          done

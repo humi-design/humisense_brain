@@ -1,0 +1,4 @@
+timestamp,machine_id,tag,value,unit
+2026-01-01T00:00:00Z,LINE-01,temperature,60.000,degC
+2026-01-01T00:01:00Z,LINE-01,pressure
+2026-01-01T00:02:00Z,LINE-02,vibration,1.100,mm_s

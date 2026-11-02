@@ -1,0 +1,37 @@
+# Secrets and local configuration. Never commit real credentials.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local runtime state
+var/
+*.log
+
+# Local database and artifact dumps
+*.dump
+*.sql.gz
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

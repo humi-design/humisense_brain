@@ -398,6 +398,93 @@ async def test_scanned_count_reported(csv_root: Path) -> None:
     assert page.scanned_count == 6
 
 
+async def _read_all(connector: CsvConnector, page_size: int) -> list[str]:
+    """Read every page in order and return the source ids, verifying linear progress."""
+    collected: list[str] = []
+    cursor: Cursor | None = None
+    while True:
+        page = await connector.fetch_records(cursor, page_size)
+        collected.extend(record.source_record_id for record in page.records)
+        if not page.has_more or page.next_cursor is None:
+            return collected
+        cursor = Cursor.model_validate(page.next_cursor)
+
+
+async def test_pagination_resumes_by_seek_not_rescan(csv_root: Path) -> None:
+    """Regression: a resume must not re-read the file from the beginning.
+
+    The checkpoint carries the byte offset of the next row, so a later page starts where
+    the previous one stopped. Without it the connector re-scanned every preceding row on
+    each page, which made a full sync quadratic in the row count.
+    """
+    write_csv(csv_root / "data.csv", synthetic_rows(50))
+    connector = CsvConnector(make_context(csv_root, config={"path": "data.csv"}, page_size=10))
+
+    first = await connector.fetch_records(None, 10)
+    assert first.has_more is True
+    cursor = CsvCursor.model_validate(first.next_cursor or {})
+    # The offset must point past the header, at the start of the next data row.
+    assert cursor.byte_offset > 0
+
+    second = await connector.fetch_records(cursor, 10)
+    # A seek-based resume still yields the same rows as a full scan of the whole file.
+    full = await _read_all(
+        CsvConnector(make_context(csv_root, config={"path": "data.csv"}, page_size=10)), 10
+    )
+    assert [r.source_record_id for r in second.records] == full[10:20]
+
+
+async def test_offset_less_checkpoint_still_resumes_correctly(csv_root: Path) -> None:
+    """A checkpoint written by an older build (no byte offset) must keep working.
+
+    Backwards compatibility matters because the platform stores the opaque cursor and may
+    hand back a value produced before an upgrade.
+    """
+    write_csv(csv_root / "data.csv", synthetic_rows(30))
+    connector = CsvConnector(make_context(csv_root, config={"path": "data.csv"}, page_size=10))
+
+    first = await connector.fetch_records(None, 10)
+    current = CsvCursor.model_validate(first.next_cursor or {})
+    # A pre-upgrade checkpoint carried a fingerprint but no byte offset.
+    legacy = CsvCursor(
+        row_index=current.row_index,
+        byte_offset=0,
+        file_fingerprint=current.file_fingerprint,
+    )
+    legacy_page = await connector.fetch_records(legacy, 10)
+    full = await _read_all(
+        CsvConnector(make_context(csv_root, config={"path": "data.csv"}, page_size=10)), 10
+    )
+    assert [r.source_record_id for r in legacy_page.records] == full[10:20]
+
+
+async def test_full_scan_reads_each_row_once(csv_root: Path) -> None:
+    """A complete scan must be linear, not quadratic, in the row count.
+
+    The connector counts rows it actually examines. Reading the whole file in pages must
+    therefore examine each row about once; a re-scanning implementation would examine far
+    more.
+    """
+    rows = 400
+    write_csv(csv_root / "data.csv", synthetic_rows(rows))
+    connector = CsvConnector(make_context(csv_root, config={"path": "data.csv"}, page_size=50))
+
+    examined = 0
+    cursor: Cursor | None = None
+    pages = 0
+    while True:
+        page = await connector.fetch_records(cursor, 50)
+        examined += page.scanned_count
+        pages += 1
+        if not page.has_more or page.next_cursor is None:
+            break
+        cursor = Cursor.model_validate(page.next_cursor)
+
+    # 400 rows at 50 per page is 8 full pages plus one trailing empty page.
+    assert pages == rows // 50 + 1
+    assert examined == rows, f"expected {rows} row reads, examined {examined}"
+
+
 async def test_close_is_idempotent(csv_root: Path) -> None:
     write_csv(csv_root / "data.csv", synthetic_rows(1))
     context = make_context(csv_root, config={"path": "data.csv"})

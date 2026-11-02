@@ -145,7 +145,10 @@ async def command_demo(settings: Settings) -> int:
 
     fixture = Path(settings.csv_allowed_roots[0]) / "synthetic_historian.csv"
     if not fixture.exists():
-        print(f"fixture not found at {fixture}; run tools/generate_fixtures.py first")
+        print(
+            f"fixture not found at {fixture}; the committed synthetic fixture lives at "
+            "data/synthetic/synthetic_historian.csv in a source checkout"
+        )
         return 2
 
     container = build_container(settings)

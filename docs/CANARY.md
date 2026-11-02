@@ -36,8 +36,8 @@ against a real historian.
 ## Current workaround
 
 Use the synthetic historian CSV with the `csv` connector for end-to-end development.
-`backend/tests/data/synthetic_historian.csv` and the seeded demo file are clearly
-labelled synthetic. They must never be presented as live Canary telemetry.
+`data/synthetic/synthetic_historian.csv` (used by `python -m humisense.devtools.cli demo`)
+and the seeded demo file are clearly labelled synthetic. They must never be presented as live Canary telemetry.
 
 ## What will not change when Canary is configured
 

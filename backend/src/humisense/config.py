@@ -9,6 +9,7 @@ from __future__ import annotations
 import ipaddress
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -18,6 +19,13 @@ from humisense.errors import ConfigurationError
 
 DEFAULT_DEV_SESSION_SECRET = "dev-only-insecure-session-secret-change-me"
 MIN_SECRET_LENGTH = 32
+
+# The repository root, three levels above this file (backend/src/humisense/config.py).
+# Relative defaults are anchored here rather than to the process working directory, so a
+# documented command works no matter which directory it is run from. A source checkout is
+# the only layout that has committed development data; an installed package must set an
+# absolute CSV_ALLOWED_ROOTS, which production validation already requires to be explicit.
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 class Settings(BaseSettings):
@@ -111,7 +119,7 @@ class Settings(BaseSettings):
     egress_max_redirects: int = 2
 
     # --- Connector limits -------------------------------------------------
-    csv_allowed_roots: Annotated[tuple[str, ...], NoDecode] = ("./data/synthetic",)
+    csv_allowed_roots: Annotated[tuple[str, ...], NoDecode] = ("data/synthetic",)
     csv_max_file_bytes: int = 64 * 1024 * 1024
     csv_max_rows: int = 1_000_000
     csv_max_processing_seconds: float = 120.0
@@ -161,6 +169,24 @@ class Settings(BaseSettings):
                 return value  # let pydantic parse JSON form
             return tuple(part.strip() for part in stripped.split(",") if part.strip())
         return value
+
+    @field_validator("csv_allowed_roots", mode="after")
+    @classmethod
+    def _anchor_relative_roots(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Anchor relative roots to the repository root, not the working directory.
+
+        The committed default (``data/synthetic``) and the documented quick start both
+        run commands from ``backend/``, so a working-directory-relative default resolved
+        to ``backend/data/synthetic`` and the CSV connector failed closed. Anchoring to
+        the repository root makes the documented commands work from any directory.
+        """
+        anchored: list[str] = []
+        for root in value:
+            candidate = Path(root).expanduser()
+            if not candidate.is_absolute():
+                candidate = _REPOSITORY_ROOT / candidate
+            anchored.append(str(candidate))
+        return tuple(anchored)
 
     @field_validator("oidc_algorithms", mode="before")
     @classmethod

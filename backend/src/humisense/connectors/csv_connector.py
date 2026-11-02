@@ -121,6 +121,15 @@ class CsvCursor(Cursor):
     row_index: int = 0
     """Zero-based index of the next data row to read, excluding the header."""
 
+    byte_offset: int = 0
+    """Byte offset of the next data row, used to resume without re-scanning.
+
+    Without it, resuming a page re-opened the file and re-read every preceding row, so a
+    full scan was quadratic in the row count. The offset is captured from ``tell()`` at a
+    row boundary, so a resume seeks straight to the checkpoint. Zero means "no usable
+    offset", in which case the reader falls back to skipping ``row_index`` rows, which
+    keeps a checkpoint written by an older build working."""
+
     file_fingerprint: str | None = None
     """SHA-256 of the file's size and modification time. A mismatch restarts the scan so
     a file replaced between pages is not silently skipped."""
@@ -447,7 +456,14 @@ class CsvConnector(BaseConnector):
         try:
             encoding = self._pick_encoding(config, path)
             with path.open("r", encoding=encoding, newline="") as handle:
-                reader = csv.reader(handle, delimiter=config.delimiter, quotechar=config.quotechar)
+                # Wrap the file in a line generator so ``tell()`` stays usable: csv.reader
+                # disables it when it iterates a file object directly, but a generator
+                # calling ``readline()`` keeps byte offsets available.
+                reader = csv.reader(
+                    self._line_iterator(handle),
+                    delimiter=config.delimiter,
+                    quotechar=config.quotechar,
+                )
                 self._skip_leading_lines(reader, config.skip_leading_lines)
                 header: list[str] | None = None
                 if config.has_header:
@@ -456,8 +472,31 @@ class CsvConnector(BaseConnector):
                         return FetchPage(records=[], has_more=False, scanned_count=0)
                     self._validate_header(config, header)
 
+                data_start_offset = handle.tell()
+
+                # Fast path: a checkpoint written by this build carries the byte offset of
+                # the next row, so the page resumes with a single seek instead of
+                # re-reading every preceding row. A checkpoint without an offset (or one
+                # whose fingerprint no longer matches) falls back to skipping rows, which
+                # keeps an older checkpoint working and restarts cleanly after a change.
+                seek_offset = csv_cursor.byte_offset
+                if seek_offset < data_start_offset or (
+                    csv_cursor.file_fingerprint and csv_cursor.file_fingerprint != fingerprint
+                ):
+                    seek_offset = 0
+                if seek_offset:
+                    handle.seek(seek_offset)
+                    row_index = csv_cursor.row_index
+                    start_index = 0
+
                 stopped_early = False
-                for row in reader:
+                while True:
+                    # ``tell()`` before pulling the row is the start of that row: csv.reader
+                    # consumes lines lazily, so nothing past this row has been read yet.
+                    row_offset = handle.tell()
+                    row = next(reader, None)
+                    if row is None:
+                        break
                     data_index = row_index
                     row_index += 1
                     if data_index < start_index:
@@ -465,7 +504,9 @@ class CsvConnector(BaseConnector):
                     if len(records) >= page_limit:
                         has_more = True
                         next_cursor = CsvCursor(
-                            row_index=data_index, file_fingerprint=fingerprint
+                            row_index=data_index,
+                            byte_offset=row_offset,
+                            file_fingerprint=fingerprint,
                         ).as_dict()
                         stopped_early = True
                         break
@@ -505,7 +546,9 @@ class CsvConnector(BaseConnector):
                     if len(records) >= page_limit:
                         has_more = True
                         next_cursor = CsvCursor(
-                            row_index=data_index + 1, file_fingerprint=fingerprint
+                            row_index=data_index + 1,
+                            byte_offset=handle.tell(),
+                            file_fingerprint=fingerprint,
                         ).as_dict()
                         break
         except ConnectorConfigError:
@@ -659,6 +702,21 @@ class CsvConnector(BaseConnector):
         """Return the physical 1-based line number for a zero-based data row index."""
         header_lines = 1 if config.has_header else 0
         return data_index + 1 + header_lines + config.skip_leading_lines
+
+    @staticmethod
+    def _line_iterator(handle: Any) -> Any:
+        """Yield physical lines, keeping the file's byte offset observable.
+
+        ``csv.reader`` disables ``tell()`` on a file object it iterates directly, because
+        it may read ahead. Feeding it a generator that calls ``readline()`` one line at a
+        time keeps ``tell()`` usable and means the offset observed before a row is pulled
+        is exactly the start of that row.
+        """
+        while True:
+            line = handle.readline()
+            if not line:
+                return
+            yield line
 
     @staticmethod
     def _skip_leading_lines(reader: Any, count: int) -> None:

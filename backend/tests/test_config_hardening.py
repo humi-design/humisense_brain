@@ -7,6 +7,7 @@ than start with one. These tests assert that each unsafe combination is rejected
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -349,3 +350,26 @@ def test_a_short_session_secret_is_still_rejected() -> None:
     """Empty is treated as unset; a real but weak value is still refused."""
     with pytest.raises(ValidationError):
         Settings(_env_file=None, session_secret="too-short")
+
+
+def test_relative_csv_roots_are_anchored_to_the_repository_root() -> None:
+    """A relative CSV root must not depend on the process working directory.
+
+    Regression: the default was ``./data/synthetic`` and the documented quick start runs
+    commands from ``backend/``, so the root resolved to ``backend/data/synthetic`` and the
+    CSV connector failed closed (``doctor`` reported a PathNotAllowedError).
+    """
+    default = Settings(_env_file=None).csv_allowed_roots
+    assert len(default) == 1
+    assert Path(default[0]).is_absolute()
+    assert default[0].endswith("data/synthetic")
+    assert Path(default[0]).is_dir()
+
+    relative = Settings(_env_file=None, csv_allowed_roots=("./data/synthetic",)).csv_allowed_roots
+    assert relative == default
+
+
+def test_absolute_csv_roots_are_left_unchanged() -> None:
+    """An absolute root is authoritative and must not be rewritten."""
+    settings = Settings(_env_file=None, csv_allowed_roots=("/srv/humisense/data",))
+    assert settings.csv_allowed_roots == ("/srv/humisense/data",)

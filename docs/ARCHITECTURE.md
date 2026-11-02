@@ -184,7 +184,8 @@ enqueues an `arq` job on Redis and returns `202` with the job id. The worker:
 `POST /ingest/v1/records`, bearer auth, `Idempotency-Key` header, bounded retries with
 exponential backoff and jitter, classification of transient vs permanent errors.
 `InProcessIngestionSink` and `HttpIngestionSink` are the two implementations;
-`LocalTestReceiver` in `tools/` is clearly marked a test implementation.
+`LocalTestIngestionSink` in `backend/src/humisense/services/ingestion.py` is clearly marked
+a test implementation.
 
 Ownership split: Layer 1 owns capture, envelope validation, transport, retries, and
 provenance. Layer 2 owns normalization, deduplication, semantic mapping, and retention
@@ -196,6 +197,10 @@ of normalized data.
 - `RedactionFilter` scrubs known credential keys and bearer/token patterns.
 - Prometheus metrics: sync counts/duration/failures/retries, records ingested,
   queue depth. No payload values as label values.
+  Note: metric definitions exist and are recorded in-process, but no scrape endpoint
+  (for example `/metrics`) is exposed yet, and `METRICS_ENABLED` is not yet consulted.
+  Metrics are therefore not observable from outside the process until an authenticated
+  scrape route is added.
 - OpenTelemetry-compatible tracing hooks (`trace_id` propagated as correlation id).
 - `GET /api/v1/health` (liveness, no detail) and `GET /api/v1/health/ready`
   (dependency status without topology or credentials).

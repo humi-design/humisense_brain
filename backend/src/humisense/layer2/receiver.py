@@ -19,6 +19,7 @@ Security properties:
 
 from __future__ import annotations
 
+import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -100,13 +101,34 @@ class IngestionReceiver:
             raise AuthenticationError(detail="The service token did not match")
 
     async def receive(self, batch: ReceivedBatch) -> IngestResult:
-        """Validate the batch and run it through the pipeline."""
+        """Validate the batch and run it through the pipeline.
+
+        The batch names its tenant. The tenant is verified, not trusted: the connection the
+        batch references must belong to that tenant, and the check is performed inside a
+        tenant-scoped session, so a producer cannot ingest into a tenant whose connection it
+        does not name.
+        """
         if not batch.records:
             raise ValidationFailure(detail="An ingestion batch must contain at least one record")
         if len(batch.records) > MAX_RECORDS_PER_BATCH:
             raise ValidationFailure(
                 detail="The ingestion batch exceeds the maximum record count",
                 context={"max_records": MAX_RECORDS_PER_BATCH},
+            )
+        if batch.organization_id.int == 0:
+            raise ValidationFailure(detail="An ingestion batch must name its organization")
+
+        # Bound the serialized size of the batch before any record is stored. A count limit
+        # alone lets a caller send 200 records of 1 MB each; this makes the byte bound real.
+        batch_bytes = sum(
+            len(json.dumps(record.payload, separators=(",", ":"), default=str).encode("utf-8"))
+            + len(json.dumps(record.metadata, separators=(",", ":"), default=str).encode("utf-8"))
+            for record in batch.records
+        )
+        if batch_bytes > self._settings.layer2_max_batch_bytes:
+            raise ValidationFailure(
+                detail="The ingestion batch exceeds the maximum serialized size",
+                context={"max_bytes": self._settings.layer2_max_batch_bytes},
             )
 
         # Every record must belong to the same connection, and that connection must belong to

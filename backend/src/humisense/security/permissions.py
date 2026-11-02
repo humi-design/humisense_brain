@@ -30,6 +30,12 @@ class Permission(str, enum.Enum):
     RECORDS_READ = "records:read"
     AUDIT_READ = "audit:read"
 
+    # Layer 2. Reading ingestion batches and quarantine is visibility; replaying a
+    # quarantined record re-runs processing and can create canonical records, so it is an
+    # administrator capability.
+    INGESTION_READ = "ingestion:read"
+    INGESTION_REPLAY = "ingestion:replay"
+
     SECRETS_WRITE = "secrets:write"
     MEMBERS_READ = "members:read"
     MEMBERS_MANAGE = "members:manage"
@@ -45,6 +51,7 @@ VIEWER_PERMISSIONS: Final[frozenset[Permission]] = frozenset(
         Permission.SYNC_READ,
         Permission.RECORDS_READ,
         Permission.ORGANIZATION_READ,
+        Permission.INGESTION_READ,
     }
 )
 
@@ -64,6 +71,7 @@ ADMIN_PERMISSIONS: Final[frozenset[Permission]] = OPERATOR_PERMISSIONS | frozens
         Permission.AUDIT_READ,
         Permission.SECRETS_WRITE,
         Permission.MEMBERS_READ,
+        Permission.INGESTION_REPLAY,
         # Operational visibility is an administrator capability. The registry carries no
         # tenant label, so this grants aggregate process metrics, not tenant data.
         Permission.METRICS_READ,

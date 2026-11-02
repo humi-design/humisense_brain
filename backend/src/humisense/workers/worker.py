@@ -100,6 +100,25 @@ async def reap_stale_jobs_task(ctx: dict[str, Any]) -> int:
     return reaped
 
 
+async def publish_outbox_task(ctx: dict[str, Any]) -> dict[str, int]:
+    """Periodic Layer 2 publication: drain the outbox for every tenant.
+
+    Runs on the worker rather than the API so exactly one process owns publication, and the
+    loop survives an API restart. Each tenant is drained inside its own tenant-scoped
+    transaction, so the sweep cannot cross a tenant boundary.
+    """
+    container = ctx["container"]
+    result = await container.layer2_outbox.publish_all_tenants()
+    if result.published or result.failed:
+        logger.info(
+            "layer2_outbox_swept",
+            published=result.published,
+            failed=result.failed,
+            skipped=result.skipped,
+        )
+    return {"published": result.published, "failed": result.failed, "skipped": result.skipped}
+
+
 class WorkerSettings:
     """arq worker configuration.
 
@@ -112,7 +131,7 @@ class WorkerSettings:
     class attributes.
     """
 
-    functions: ClassVar[list[Any]] = [run_sync_job, reap_stale_jobs_task]
+    functions: ClassVar[list[Any]] = [run_sync_job, reap_stale_jobs_task, publish_outbox_task]
     on_startup = startup
     on_shutdown = shutdown
 
@@ -126,5 +145,8 @@ class WorkerSettings:
     _settings = get_settings()
     redis_settings = RedisSettings.from_dsn(_settings.redis_url)
     cron_jobs: ClassVar[list[Any]] = [
-        cron(reap_stale_jobs_task, minute={0, 30}, run_at_startup=False)
+        cron(reap_stale_jobs_task, minute={0, 30}, run_at_startup=False),
+        # Drain the Layer 2 outbox every minute so publication latency is bounded without
+        # tying publication to request traffic.
+        cron(publish_outbox_task, minute=set(range(60)), run_at_startup=True),
     ]

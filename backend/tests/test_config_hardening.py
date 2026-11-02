@@ -40,6 +40,7 @@ def production(**overrides: object) -> Settings:
         "egress_allowed_hosts": ("historian.example.com",),
         "docs_enabled": False,
         "layer2_mode": "disabled",
+        "layer2_ingest_token": A_KEY,
         "task_queue_mode": "arq",
     }
     defaults.update(overrides)
@@ -191,6 +192,31 @@ def test_database_password_is_never_echoed_in_the_settings_representation() -> N
     settings = production(database_url="postgresql+asyncpg://app:sekrit@db.internal:5432/app")
     rendered = f"{settings!r}{settings.model_dump()}"
     assert "sekrit" not in rendered
+
+
+def test_production_requires_a_token_while_the_ingestion_receiver_is_enabled() -> None:
+    """An enabled receiver with no token accepts nothing; that is a config error."""
+    reject(layer2_ingest_token=None)
+
+
+def test_production_accepts_a_disabled_ingestion_receiver_without_a_token() -> None:
+    settings = production(layer2_ingest_enabled=False, layer2_ingest_token=None)
+    settings.require_production_ready()
+
+
+def test_production_http_publication_requires_a_url_and_token() -> None:
+    reject(layer2_publish_mode="http")
+    reject(layer2_publish_mode="http", layer2_publish_base_url="https://sink.example.com")
+
+
+def test_layer2_batch_bound_must_be_within_the_transport_limit() -> None:
+    """A receiver bound above the request-body limit is dead: the transport rejects first."""
+    reject(layer2_max_batch_bytes=8 * 1024 * 1024)
+    production(layer2_max_batch_bytes=1 * 1024 * 1024).require_production_ready()
+
+
+def test_layer2_batch_bound_must_be_positive() -> None:
+    reject(layer2_max_batch_bytes=0)
 
 
 def test_missing_production_secret_is_reported_not_ignored(

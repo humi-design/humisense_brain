@@ -139,22 +139,40 @@ Replay is an explicit, authorized, audited operation.
 ## 7. Security
 
 Reuses Layer 1 boundaries: RLS on every tenant table, deny-by-default permissions (new:
-`ingestion:read`, `ingestion:replay`, `quarantine:read`, `quarantine:manage`), strict schema
-validation, payload size and complexity limits, secrets never logged, audit events for
-sensitive operations. The receiver authenticates service-to-service calls with a bearer
-token compared in constant time. All ingested content is marked untrusted and preserved as
-data. Layer 2 has no capability to execute commands, send messages, or write to business
-systems.
+`ingestion:read`, `ingestion:replay`), strict schema validation, payload size and complexity
+limits, secrets never logged, audit events for sensitive operations. The receiver
+authenticates service-to-service calls with a bearer token compared in constant time. All
+ingested content is marked untrusted and preserved as data. Layer 2 has no capability to
+execute commands, send messages, or write to business systems.
+
+The ingestion receiver is the only endpoint in the system that does not use a session
+principal, and it is fenced accordingly. It accepts a service bearer token, and the tenant is
+not trusted from the request body: the connection named by the batch is looked up inside a
+tenant-scoped session, and a batch whose connection belongs to another tenant is refused. A
+compromised producer token can therefore write only to connections that already exist, and
+never across a tenant boundary.
+
+The receiver is registered as a separate router (`machine_router`) and only when
+`layer2_ingest_enabled` is true, so a deployment that does not accept machine writes has no
+such route at all rather than one that exists and refuses. The quarantine endpoints are
+session-authenticated and stay available either way. The production gate (`require_production_ready`)
+refuses an enabled receiver with no token, and refuses `http` publication with no base URL or
+token, so an inert or unauthenticated handoff cannot be shipped by relabelling the
+environment. Replaying a quarantined record is audited (`quarantine.replayed`), as is every
+accepted or rejected batch (`ingestion.batch_received`, `ingestion.batch_rejected`).
 
 ## 8. Interfaces
 
-- `POST /ingest/v1/records` — receive a batch from Layer 1 (service auth).
-- `GET /ingestion/batches`, `GET /ingestion/batches/{id}` — batch status.
-- `GET /ingestion/records`, `GET /ingestion/records/{id}` — canonical records (no raw
-  payload by default).
-- `GET /ingestion/quarantine`, `POST /ingestion/quarantine/{id}/replay` — quarantine review
-  and authorized replay.
-- `GET /ingestion/health` — pipeline health (counts and lag, no tenant data).
+- `POST /api/v1/ingestion/batches` — receive a batch from Layer 1 (service bearer token).
+- `GET /api/v1/ingestion/quarantine` — list open quarantined records (`ingestion:read`).
+- `POST /api/v1/ingestion/quarantine/{id}/replay` — replay a quarantined record from its
+  preserved payload (`ingestion:replay`, CSRF-protected).
+
+The publisher is not an HTTP surface: it runs as a background loop over the outbox table,
+scheduled on the `arq` worker (`publish_outbox_task`, once a minute). Each tenant is drained
+inside its own tenant-scoped transaction, so a sweep that visits tenants in sequence still
+cannot read or write across a tenant boundary. Publication is not tied to request traffic, so
+a batch is published even when no request follows it.
 
 ## 9. Performance
 

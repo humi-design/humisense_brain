@@ -53,6 +53,10 @@ class AuditAction:
     SESSION_REVOKED = "session.revoked"
     INGESTION_DELIVERED = "ingestion.delivered"
     INGESTION_FAILED = "ingestion.failed"
+    INGESTION_BATCH_RECEIVED = "ingestion.batch_received"
+    INGESTION_BATCH_REJECTED = "ingestion.batch_rejected"
+    QUARANTINE_REPLAYED = "quarantine.replayed"
+    QUARANTINE_REPLAY_FAILED = "quarantine.replay_failed"
 
 
 OUTCOME_SUCCESS = "success"

@@ -157,20 +157,19 @@ class IngestionPipeline:
         result = IngestResult(batch_id=batch_id)
 
         existing = await self._existing_batch(organization_id, batch_id)
-        if existing is not None:
+        is_redelivery = existing is not None
+        if is_redelivery:
             logger.info(
                 "ingest_batch_redelivered",
                 batch_id=batch_id,
                 organization_id=str(organization_id),
                 correlation_id=correlation_id,
             )
-            # The batch was already processed; report its stored counters rather than
-            # reprocessing. Records are still deduplicated individually below, so a partial
-            # redelivery is handled correctly.
-            result.accepted = existing.records_accepted
-            result.duplicates = existing.records_duplicate
-            result.quarantined = existing.records_quarantined
-            result.failed = existing.records_failed
+            # The batch row is the durable record of the *first* processing and is not
+            # rewritten by a retransmit. The counters returned to the caller describe what
+            # this delivery did, computed below from its own outcomes: a retransmit accepts
+            # nothing new, so every record reports as a duplicate. Seeding the counters from
+            # the stored row and then adding the outcomes would report one record twice.
 
         batch_row_id = await self._ensure_batch(
             organization_id=organization_id,
@@ -197,15 +196,19 @@ class IngestionPipeline:
             else:
                 result.accepted += 1
 
-        await self._finalize_batch(
-            organization_id=organization_id,
-            batch_row_id=batch_row_id,
-            received=len(records),
-            accepted=result.accepted,
-            duplicates=result.duplicates,
-            quarantined=result.quarantined,
-            failed=result.failed,
-        )
+        # A retransmit must not overwrite the durable counters of the first processing: the
+        # batch row records what the original delivery did. A first delivery finalizes as
+        # usual.
+        if not is_redelivery:
+            await self._finalize_batch(
+                organization_id=organization_id,
+                batch_row_id=batch_row_id,
+                received=len(records),
+                accepted=result.accepted,
+                duplicates=result.duplicates,
+                quarantined=result.quarantined,
+                failed=result.failed,
+            )
         if self._metrics:
             self._metrics.layer2_batch_processed(duration_seconds=time.perf_counter() - started)
         return result

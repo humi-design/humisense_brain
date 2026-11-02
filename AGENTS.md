@@ -26,6 +26,7 @@ uv run bandit -c pyproject.toml -r src
 uv run pip-audit --progress-spinner off
 uv run alembic upgrade head
 uv run python -m humisense.devtools.cli seed
+uv run python -m humisense.devtools.cli benchmark --records 5000 --batch-size 500
 uv run uvicorn humisense.main:app --reload --port 8000
 uv run arq humisense.workers.worker.WorkerSettings
 ```
@@ -90,6 +91,34 @@ npm run typecheck && npm run lint && npm test && npm run build
   class attribute; `test_worker.py` asserts what `get_kwargs` actually resolves. The worker
   service also needs `CORS_ORIGINS` (it shares the production validator) and an arq
   `--check` healthcheck (it serves no HTTP).
+
+## Layer 2 (ingestion engine)
+
+- The ingestion receiver is the only endpoint that does not use a session principal. It is
+  registered as `machine_router` only when `layer2_ingest_enabled` is true, and it
+  authenticates with a service bearer token (`layer2_ingest_token`). The tenant is never
+  trusted from the request body: the batch's connection is looked up inside a tenant-scoped
+  session. Do not add a session-based path to this router.
+- `layer2_max_batch_bytes` bounds the serialized payload + metadata of a whole batch, and the
+  receiver enforces it (a record-count limit alone lets a caller send the maximum number of
+  maximum-size records). It must stay at or below `max_request_body_bytes`; the production
+  gate refuses a larger value, because the transport would reject the request first and the
+  receiver's own check would be dead code.
+- A retransmit of the same `batch_id` must not rewrite the durable batch counters. The
+  counters returned to a caller describe what *that delivery* did (a retransmit reports
+  every record as a duplicate); the `ingest_batches` row keeps the first processing's
+  counters. Seeding the response from the row and then adding the per-record outcomes
+  double-counts.
+- `layer2_publish_mode` is `disabled` | `log` | `http`. Publication is durable-first: the
+  canonical record and its outbox event are written in one transaction, and the publisher
+  moves `pending → published` only after the sink confirms. `http` publication requires both
+  `layer2_publish_base_url` and a token in production.
+- Retention is **not** implemented. Raw records are preserved indefinitely. Do not add a
+  retention-looking knob until a purge job exists to honour it — a knob that promises
+  retention without a purge is worse than no knob (see `docs/LAYER2-RELEASE.md`, D2).
+- `uv run python -m humisense.devtools.cli benchmark` measures pipeline throughput and the
+  idempotency path against a real database. It is a measurement tool: it asserts nothing and
+  its numbers are recorded in `docs/LAYER2-RELEASE.md`.
 
 ## Conventions
 

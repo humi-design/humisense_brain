@@ -305,6 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
         "release-check",
         help="refuse to release unless the configuration is production-ready",
     )
+    benchmark = sub.add_parser(
+        "benchmark",
+        help="measure Layer 2 ingestion throughput against the current database",
+    )
+    benchmark.add_argument("--records", type=int, default=5000)
+    benchmark.add_argument("--batch-size", type=int, default=500)
     return parser
 
 
@@ -313,6 +319,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     settings = get_settings()
     configure_logging(json_logs=settings.log_json, level=settings.log_level)
+
+    if args.command == "benchmark":
+        from humisense.devtools.benchmark import command_benchmark
+
+        return int(
+            asyncio.run(
+                command_benchmark(settings, records=args.records, batch_size=args.batch_size)
+            )
+        )
 
     handlers: dict[str, Any] = {
         "seed": command_seed,

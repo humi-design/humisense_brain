@@ -266,3 +266,74 @@ class OverviewResponse(BaseModel):
     recent_jobs: list[SyncJobResponse]
     ingestion_sink: str
     layer2_configured: bool
+
+
+# --- Layer 2 ---------------------------------------------------------------
+
+
+class IngestRecordRequest(BaseModel):
+    """One record inside an ingestion batch envelope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: uuid.UUID
+    connector_type: str = Field(min_length=1, max_length=64)
+    source_record_id: str = Field(min_length=1, max_length=200)
+    record_type: str = Field(min_length=1, max_length=64)
+    source_timestamp: datetime | None = None
+    observed_timestamp: datetime
+    payload: dict[str, Any]
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    source_schema_version: str = Field(min_length=1, max_length=32)
+    content_hash: str | None = Field(default=None, max_length=128)
+
+
+class IngestBatchRequest(BaseModel):
+    """The batch envelope a producer POSTs to the ingestion receiver."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    envelope_version: Literal["1.0"]
+    organization_id: uuid.UUID
+    batch_id: str = Field(min_length=1, max_length=128)
+    correlation_id: str | None = Field(default=None, max_length=128)
+    producer: str | None = Field(default=None, max_length=200)
+    records: list[IngestRecordRequest] = Field(min_length=1, max_length=200)
+
+
+class RecordOutcomeResponse(BaseModel):
+    source_record_id: str
+    state: str
+    error_code: str | None = None
+
+
+class IngestBatchResponse(BaseModel):
+    batch_id: str
+    correlation_id: str
+    accepted: int
+    duplicates: int
+    quarantined: int
+    failed: int
+    outcomes: list[RecordOutcomeResponse]
+
+
+class QuarantineItemResponse(BaseModel):
+    quarantine_id: uuid.UUID
+    stage: str
+    error_code: str
+    source_record_key: str | None
+    status: str
+    replay_count: int
+    created_at: datetime
+
+
+class QuarantineListResponse(BaseModel):
+    items: list[QuarantineItemResponse]
+    total: int
+
+
+class QuarantineReplayResponse(BaseModel):
+    quarantine_id: uuid.UUID
+    replayed: bool
+    state: str
+    error_code: str | None = None

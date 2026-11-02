@@ -16,6 +16,10 @@ import structlog
 from humisense.config import Settings
 from humisense.connectors.base import load_builtin_connectors, registry
 from humisense.db.session import Database
+from humisense.layer2.outbox import OutboxPublisher
+from humisense.layer2.pipeline import IngestionPipeline
+from humisense.layer2.receiver import IngestionReceiver
+from humisense.layer2.replay import QuarantineService
 from humisense.observability.metrics import Metrics
 from humisense.secrets.base import SecretsProvider
 from humisense.secrets.factory import build_secrets_provider
@@ -46,6 +50,10 @@ class Container:
     ingestion: IngestionService
     sync: SyncService
     metrics: Metrics
+    layer2_pipeline: IngestionPipeline
+    layer2_receiver: IngestionReceiver
+    layer2_quarantine: QuarantineService
+    layer2_outbox: OutboxPublisher
     token_verifier: TokenVerifier
     rate_limiter: RateLimiter
     task_queue: TaskQueue
@@ -68,6 +76,7 @@ class Container:
         if self._closed:
             return
         self._closed = True
+        await self.layer2_outbox.close()
         await self.task_queue.close()
         await self.ingestion.close()
         await self.database.dispose()
@@ -100,6 +109,20 @@ def build_container(settings: Settings, *, inline_runner: Any = None) -> Contain
     connections = ConnectionService(database, settings, audit, runtime)
     sync = SyncService(database, settings, audit, runtime, records, ingestion, metrics=metrics)
 
+    layer2_pipeline = IngestionPipeline(database, settings, metrics=metrics)
+    layer2_receiver = IngestionReceiver(
+        database, settings, pipeline=layer2_pipeline, metrics=metrics
+    )
+    layer2_quarantine = QuarantineService(
+        database, settings, pipeline=layer2_pipeline, metrics=metrics
+    )
+    layer2_outbox = OutboxPublisher(
+        database,
+        settings,
+        metrics=metrics,
+        egress_policy=egress_policy,
+    )
+
     token_verifier = build_token_verifier(settings)
     rate_limiter = build_rate_limiter(settings.redis_url, enabled=settings.rate_limit_enabled)
 
@@ -119,6 +142,10 @@ def build_container(settings: Settings, *, inline_runner: Any = None) -> Contain
         ingestion=ingestion,
         sync=sync,
         metrics=metrics,
+        layer2_pipeline=layer2_pipeline,
+        layer2_receiver=layer2_receiver,
+        layer2_quarantine=layer2_quarantine,
+        layer2_outbox=layer2_outbox,
         token_verifier=token_verifier,
         rate_limiter=rate_limiter,
         task_queue=task_queue,

@@ -13,7 +13,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
-    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -610,7 +609,9 @@ class CanonicalRecord(UUIDPrimaryKey, Base):
     processed_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     source_timezone: Mapped[str | None] = mapped_column(String(64))
-    source_time_metadata: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    source_time_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
 
     normalized_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     extensions: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
@@ -768,4 +769,3 @@ class RecordProcessingEvent(UUIDPrimaryKey, Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-

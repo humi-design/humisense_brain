@@ -146,14 +146,14 @@ class Settings(BaseSettings):
     layer2_ingest_enabled: bool = True
     """Whether the ingestion receiver route is registered. Disabled means the route does
     not exist at all, rather than existing and rejecting."""
-    layer2_max_batch_bytes: int = 8 * 1024 * 1024
-    layer2_pipeline_max_attempts: int = 3
+    layer2_max_batch_bytes: int = 1 * 1024 * 1024
+    """Upper bound on a batch's serialized records. Kept at or below
+    ``max_request_body_bytes`` so an HTTP caller is stopped by the same limit the receiver
+    enforces, rather than by a smaller transport limit that makes this one dead."""
     layer2_publish_mode: Literal["disabled", "log", "http"] = "disabled"
     layer2_publish_base_url: str | None = None
     layer2_publish_secret_ref: str | None = None
     layer2_publish_bearer_token: SecretStr | None = None
-    layer2_retention_raw_days: int = 90
-    """Retention for preserved raw payloads. 0 means retain indefinitely."""
 
     # --- Resource protection ---------------------------------------------
     rate_limit_enabled: bool = True
@@ -391,6 +391,17 @@ class Settings(BaseSettings):
             problems.append("layer2_mode='local_test_receiver' is a test-only sink")
         if self.layer2_mode == "http" and not self.layer2_bearer_token_resolved():
             problems.append("a Layer 2 bearer token is required for http delivery")
+        if self.layer2_ingest_enabled and not self.layer2_ingest_token_resolved():
+            # Without a token the receiver refuses every request. That is safe, but it means
+            # the deployment silently accepts nothing, so it is a configuration error here.
+            problems.append(
+                "layer2_ingest_token is required while the ingestion receiver is enabled"
+            )
+        if self.layer2_publish_mode == "http":
+            if not self.layer2_publish_base_url:
+                problems.append("layer2_publish_base_url is required for http publication")
+            if not self.layer2_publish_token_resolved():
+                problems.append("a Layer 2 publish token is required for http publication")
         if self.task_queue_mode != "arq":
             problems.append("task_queue_mode must be 'arq' so sync work runs outside the API")
         if problems:
@@ -411,6 +422,14 @@ class Settings(BaseSettings):
             raise ConfigurationError(detail="default_page_size must not exceed max_page_size")
         if self.sync_batch_size < 1:
             raise ConfigurationError(detail="sync_batch_size must be positive")
+        if self.layer2_max_batch_bytes < 1:
+            raise ConfigurationError(detail="layer2_max_batch_bytes must be positive")
+        if self.layer2_max_batch_bytes > self.max_request_body_bytes:
+            # The receiver's own bound would then never be reached, because the transport
+            # limit rejects the request first: the configured value would be dead.
+            raise ConfigurationError(
+                detail="layer2_max_batch_bytes must not exceed max_request_body_bytes"
+            )
         if self.egress_allow_private_networks and self.is_production:
             for entry in self.egress_allowed_hosts:
                 self._assert_not_broad_private_cidr(entry)

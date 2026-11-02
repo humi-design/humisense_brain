@@ -20,6 +20,8 @@ from humisense.layer2.outbox import OutboxPublisher
 from humisense.layer2.pipeline import IngestionPipeline
 from humisense.layer2.receiver import IngestionReceiver
 from humisense.layer2.replay import QuarantineService
+from humisense.layer3.engine import AnalyticsEngine
+from humisense.layer3.repository import AnalyticsRepository
 from humisense.observability.metrics import Metrics
 from humisense.secrets.base import SecretsProvider
 from humisense.secrets.factory import build_secrets_provider
@@ -54,6 +56,8 @@ class Container:
     layer2_receiver: IngestionReceiver
     layer2_quarantine: QuarantineService
     layer2_outbox: OutboxPublisher
+    layer3_repository: AnalyticsRepository
+    layer3_engine: AnalyticsEngine
     token_verifier: TokenVerifier
     rate_limiter: RateLimiter
     task_queue: TaskQueue
@@ -123,6 +127,9 @@ def build_container(settings: Settings, *, inline_runner: Any = None) -> Contain
         egress_policy=egress_policy,
     )
 
+    layer3_repository = AnalyticsRepository(database)
+    layer3_engine = AnalyticsEngine(layer3_repository, settings, metrics=metrics)
+
     token_verifier = build_token_verifier(settings)
     rate_limiter = build_rate_limiter(settings.redis_url, enabled=settings.rate_limit_enabled)
 
@@ -146,6 +153,8 @@ def build_container(settings: Settings, *, inline_runner: Any = None) -> Contain
         layer2_receiver=layer2_receiver,
         layer2_quarantine=layer2_quarantine,
         layer2_outbox=layer2_outbox,
+        layer3_repository=layer3_repository,
+        layer3_engine=layer3_engine,
         token_verifier=token_verifier,
         rate_limiter=rate_limiter,
         task_queue=task_queue,

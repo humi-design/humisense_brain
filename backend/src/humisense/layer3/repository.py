@@ -203,6 +203,30 @@ class AnalyticsRepository:
 
     # --- Quality / readiness ---------------------------------------------
 
+    async def list_quality_results(
+        self,
+        organization_id: uuid.UUID,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        status: str | None = None,
+        entity_id: str | None = None,
+    ) -> list[DataQualityResultRow]:
+        async with self._database.tenant_session(organization_id) as session:
+            statement = select(DataQualityResultRow).where(
+                DataQualityResultRow.organization_id == organization_id
+            )
+            if status:
+                statement = statement.where(DataQualityResultRow.status == status)
+            if entity_id:
+                statement = statement.where(DataQualityResultRow.entity_id == entity_id)
+            statement = (
+                statement.order_by(DataQualityResultRow.window_end.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            return list((await session.scalars(statement)).all())
+
     async def upsert_quality(self, organization_id: uuid.UUID, values: dict[str, Any]) -> None:
         async with self._database.tenant_session(organization_id) as session:
             statement = pg_insert(DataQualityResultRow).values(

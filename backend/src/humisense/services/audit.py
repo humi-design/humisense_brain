@@ -57,6 +57,10 @@ class AuditAction:
     INGESTION_BATCH_REJECTED = "ingestion.batch_rejected"
     QUARANTINE_REPLAYED = "quarantine.replayed"
     QUARANTINE_REPLAY_FAILED = "quarantine.replay_failed"
+    ANALYTICS_RUN_REQUESTED = "analytics.run_requested"
+    ANALYTICS_RUN_SUCCEEDED = "analytics.run_succeeded"
+    ANALYTICS_RUN_FAILED = "analytics.run_failed"
+    ANALYTICS_RULE_UPDATED = "analytics.rule_updated"
 
 
 OUTCOME_SUCCESS = "success"

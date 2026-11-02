@@ -36,6 +36,13 @@ class Permission(str, enum.Enum):
     INGESTION_READ = "ingestion:read"
     INGESTION_REPLAY = "ingestion:replay"
 
+    # Layer 3. Reading detections and quality is visibility; running an analytics job
+    # consumes compute and writes detections, so it is an operator capability; configuring
+    # rules changes what the platform considers anomalous, so it is an administrator one.
+    ANALYTICS_READ = "analytics:read"
+    ANALYTICS_RUN = "analytics:run"
+    ANALYTICS_CONFIGURE = "analytics:configure"
+
     SECRETS_WRITE = "secrets:write"
     MEMBERS_READ = "members:read"
     MEMBERS_MANAGE = "members:manage"
@@ -52,6 +59,7 @@ VIEWER_PERMISSIONS: Final[frozenset[Permission]] = frozenset(
         Permission.RECORDS_READ,
         Permission.ORGANIZATION_READ,
         Permission.INGESTION_READ,
+        Permission.ANALYTICS_READ,
     }
 )
 
@@ -60,6 +68,7 @@ OPERATOR_PERMISSIONS: Final[frozenset[Permission]] = VIEWER_PERMISSIONS | frozen
         Permission.CONNECTIONS_TEST,
         Permission.SYNC_RUN,
         Permission.SYNC_CANCEL,
+        Permission.ANALYTICS_RUN,
     }
 )
 
@@ -72,6 +81,7 @@ ADMIN_PERMISSIONS: Final[frozenset[Permission]] = OPERATOR_PERMISSIONS | frozens
         Permission.SECRETS_WRITE,
         Permission.MEMBERS_READ,
         Permission.INGESTION_REPLAY,
+        Permission.ANALYTICS_CONFIGURE,
         # Operational visibility is an administrator capability. The registry carries no
         # tenant label, so this grants aggregate process metrics, not tenant data.
         Permission.METRICS_READ,

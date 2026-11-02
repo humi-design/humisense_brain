@@ -120,9 +120,7 @@ async def test_analytics_execution_log_rejects_update(
 
     with pytest.raises(DBAPIError) as excinfo:
         async with container.database.tenant_session(organization) as session:
-            await session.execute(
-                text("UPDATE analytics_execution_logs SET status = 'tampered'")
-            )
+            await session.execute(text("UPDATE analytics_execution_logs SET status = 'tampered'"))
     assert "append-only" in str(excinfo.value).lower()
 
 

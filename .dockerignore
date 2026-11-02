@@ -1,0 +1,50 @@
+# Build context exclusions. This file is used by both the backend and frontend image
+# builds, whose context is the repository root.
+#
+# Nothing secret may enter an image layer. .env files, private keys, local databases, and
+# developer state are excluded here as well as ignored by git, so a stray `docker build`
+# cannot bake a credential into a layer.
+
+# Secrets and local configuration
+.env
+.env.*
+!ops/compose/.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Version control and CI
+.git
+.gitignore
+.github
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.venv/
+**/venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.coverage
+**/htmlcov/
+
+# Node / frontend build output
+**/node_modules/
+**/dist/
+**/.vite/
+
+# Local runtime state and databases
+var/
+**/*.log
+*.dump
+*.sql.gz
+*.tar.gz
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/

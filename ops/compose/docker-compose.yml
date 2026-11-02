@@ -1,0 +1,310 @@
+# Production-shaped deployment for Humisense Brain / OS, Layer 1.
+#
+# This is a single-node reference deployment: PostgreSQL, Redis, the API, the worker, and
+# the frontend, on private Docker networks. It is deliberately NOT high availability.
+# There is one database, one Redis, one API replica, and one worker. Nothing here claims
+# failover or zero-downtime upgrades; see docs/DEPLOYMENT.md for what that would require.
+#
+# The stack runs the API in `APP_ENV=production`, so it is subject to the same startup
+# gate as a real deployment. That gate requires verified TLS to the database, so this file
+# also ships a `tls` init service that generates a CA and server certificate into a shared
+# volume. A real deployment replaces that service with certificates from its own CA; see
+# docs/DEPLOYMENT.md. The requirement is never disabled to make the stack boot.
+#
+# Usage:
+#   cp ops/compose/.env.example ops/compose/.env
+#   # edit ops/compose/.env, then:
+#   docker compose --env-file ops/compose/.env -f ops/compose/docker-compose.yml up -d
+#
+# No credential appears in this file. Every secret is read from the environment file,
+# which is git-ignored.
+
+name: humisense
+
+services:
+  # Generates the database TLS material once, before PostgreSQL starts. Replaced by real
+  # certificates in a managed deployment.
+  tls:
+    build:
+      context: ../..
+      dockerfile: ops/docker/tls.Dockerfile
+    image: humisense-tls:${HUMISENSE_IMAGE_TAG:-local}
+    command: ["/bin/sh", "/generate-tls.sh"]
+    environment:
+      CERT_DIR: /certs
+    volumes:
+      - db-tls:/certs
+      - ../postgres/generate-tls.sh:/generate-tls.sh:ro
+    networks:
+      - data
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+
+  db:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    depends_on:
+      tls:
+        condition: service_completed_successfully
+    # TLS is enabled on the server with the generated certificate. The key is owned by
+    # the postgres user (uid 70) and is not readable by anyone else.
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+    environment:
+      POSTGRES_DB: humisense
+      POSTGRES_USER: postgres
+      # The superuser password is used only to create the application role on first boot.
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
+      # The application role's password, consumed by ops/postgres/init.sql.
+      HUMISENSE_APP_PASSWORD: ${HUMISENSE_APP_PASSWORD:?set HUMISENSE_APP_PASSWORD}
+    volumes:
+      # Named volume: the data survives `docker compose down` and container recreation.
+      - db-data:/var/lib/postgresql/data
+      - db-tls:/certs:ro
+      # Runs once, on an empty data directory, to create the application role and database.
+      - ../postgres/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    # No ports are published. The database is reachable only on the private network.
+    expose:
+      - "5432"
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d humisense"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    # Modest, explicit limits so one service cannot starve the host.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # Append-only persistence and a password. The password is passed on the command line
+    # (visible only to the container's own process list, not to the image).
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    expose:
+      - "6379"
+    networks:
+      - data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: ops/docker/backend.Dockerfile
+    image: humisense-backend:${HUMISENSE_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: production
+      # The API is the only service that applies migrations, so several processes do not
+      # race the same DDL.
+      HUMISENSE_RUN_MIGRATIONS: "1"
+      DATABASE_URL: postgresql+asyncpg://humisense_app:${HUMISENSE_APP_PASSWORD}@db:5432/humisense
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      # Everything else comes from the deployment's environment file.
+      AUTH_MODE: ${AUTH_MODE:-oidc}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:?set OIDC_AUDIENCE}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      SECRETS_PROVIDER: ${SECRETS_PROVIDER:-encrypted_db}
+      SECRETS_MASTER_KEY: ${SECRETS_MASTER_KEY:?set SECRETS_MASTER_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
+      TRUSTED_PROXY_COUNT: ${TRUSTED_PROXY_COUNT:-1}
+      # Database TLS is required in production and verified against the CA the tls
+      # service generated. The backend runs as uid 10001 and reads the CA read-only.
+      DATABASE_REQUIRE_TLS: "true"
+      DATABASE_TLS_CA_PATH: /etc/ssl/humisense/ca.crt
+      LAYER2_MODE: ${LAYER2_MODE:-disabled}
+      LAYER2_BASE_URL: ${LAYER2_BASE_URL:-}
+      LAYER2_BEARER_TOKEN: ${LAYER2_BEARER_TOKEN:-}
+      EGRESS_ALLOWED_HOSTS: ${EGRESS_ALLOWED_HOSTS:-}
+      EGRESS_ALLOW_PRIVATE_NETWORKS: ${EGRESS_ALLOW_PRIVATE_NETWORKS:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # No ports are published. The frontend proxies /api to this service on the app network.
+    expose:
+      - "8000"
+    networks:
+      - app
+      - data
+    # The image runs as uid 10001; the read-only root filesystem plus the tmpfs and the
+    # named upload volume are the only writable locations.
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - uploads:/app/var/uploads
+      # The synthetic CSV data is mounted read-only so the documented demo connector
+      # works. Real deployments replace this with an authorized read-only mount.
+      - ../../data/synthetic:/app/data/synthetic:ro
+      # The database CA certificate, read-only, for verified TLS to PostgreSQL.
+      - db-tls:/etc/ssl/humisense:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=4).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Graceful shutdown: uvicorn receives SIGTERM and finishes in-flight requests.
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: ops/docker/backend.Dockerfile
+    image: humisense-backend:${HUMISENSE_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        # Wait for the API to have applied migrations before the worker starts.
+        condition: service_healthy
+    command: ["arq", "humisense.workers.worker.WorkerSettings"]
+    environment:
+      APP_ENV: production
+      # The worker never runs migrations; the API service does.
+      HUMISENSE_RUN_MIGRATIONS: "0"
+      DATABASE_URL: postgresql+asyncpg://humisense_app:${HUMISENSE_APP_PASSWORD}@db:5432/humisense
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      AUTH_MODE: ${AUTH_MODE:-oidc}
+      OIDC_ISSUER: ${OIDC_ISSUER:?set OIDC_ISSUER}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:?set OIDC_AUDIENCE}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      SECRETS_PROVIDER: ${SECRETS_PROVIDER:-encrypted_db}
+      SECRETS_MASTER_KEY: ${SECRETS_MASTER_KEY:?set SECRETS_MASTER_KEY}
+      # The worker reaches the database over the same verified TLS channel as the API.
+      DATABASE_REQUIRE_TLS: "true"
+      DATABASE_TLS_CA_PATH: /etc/ssl/humisense/ca.crt
+      LAYER2_MODE: ${LAYER2_MODE:-disabled}
+      LAYER2_BASE_URL: ${LAYER2_BASE_URL:-}
+      LAYER2_BEARER_TOKEN: ${LAYER2_BEARER_TOKEN:-}
+      EGRESS_ALLOWED_HOSTS: ${EGRESS_ALLOWED_HOSTS:-}
+      EGRESS_ALLOW_PRIVATE_NETWORKS: ${EGRESS_ALLOW_PRIVATE_NETWORKS:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    expose:
+      - "8000"
+    networks:
+      - app
+      - data
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - uploads:/app/var/uploads
+      - ../../data/synthetic:/app/data/synthetic:ro
+      - db-tls:/etc/ssl/humisense:ro
+    # The worker's arq process exits on SIGTERM and finishes the current job.
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: ops/docker/frontend.Dockerfile
+    image: humisense-frontend:${HUMISENSE_IMAGE_TAG:-local}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    # The only service that publishes a port, and only on loopback. A TLS-terminating
+    # reverse proxy on the host fronts it; see docs/DEPLOYMENT.md.
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:8080"
+    networks:
+      - app
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+networks:
+  # The application network carries HTTP between the frontend, the API, and the worker.
+  app:
+    driver: bridge
+  # The data network carries database and Redis traffic. The frontend is not attached to
+  # it, so a compromise of the static UI container cannot reach the database directly.
+  data:
+    driver: bridge
+
+volumes:
+  db-data:
+  db-tls:
+  redis-data:
+  uploads:

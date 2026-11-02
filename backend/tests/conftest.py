@@ -113,7 +113,9 @@ def test_settings(tmp_path: Path) -> Iterator[Settings]:
         rate_limit_enabled=True,
         cors_origins=("http://localhost:5173",),
         docs_enabled=True,
-        metrics_enabled=False,
+        # Match the production default so the scrape endpoint is part of the tested
+        # surface; test_api_metrics asserts the disabled case explicitly.
+        metrics_enabled=True,
     )
     yield settings
 

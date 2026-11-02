@@ -66,6 +66,23 @@ npm run typecheck && npm run lint && npm test && npm run build
 - gitleaks reads `.gitleaks.toml` automatically. The config keeps the default ruleset and
   allows only specific synthetic fixture values, matched on the secret itself (not by file
   or path), so a real credential committed in the same test files is still reported.
+- The reference stack (`ops/compose/docker-compose.yml`) runs the API with
+  `APP_ENV=production`, so it must satisfy the production gate, including verified database
+  TLS. The `tls` init service generates a CA and server certificate; a real deployment
+  replaces it with its own CA at `DATABASE_TLS_CA_PATH`. Do not disable
+  `database_require_tls` to make the stack start.
+- `Settings.database_connect_args` builds an `ssl.SSLContext` for asyncpg when
+  `database_require_tls` is set. asyncpg rejects a plain dict for `ssl`, so a dict would
+  silently connect in plaintext. Both the app engine and `alembic/env.py` pass it.
+- `require_production_ready()` is stricter than `validate_for_production()`: it also
+  refuses a configuration that is merely not production-grade. `uv run python -m
+  humisense.devtools.cli release-check` is the caller; it exits non-zero and prints every
+  unmet requirement. Use it as the release gate.
+- Prometheus metrics are exposed at `GET /api/v1/metrics`, gated by the `metrics:read`
+  permission and by `settings.metrics_enabled`. The route is not registered at all when
+  metrics are disabled.
+- `ops/compose/.env` is git-ignored; `ops/compose/.env.example` is committed and must
+  contain placeholders only (CI enforces this).
 
 ## Conventions
 

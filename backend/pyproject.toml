@@ -65,7 +65,11 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # ASYNC251: a fixed-window expiry test has to let real time pass; there is no other way
 # to observe the window rolling over.
-"tests/*" = ["S105", "S106", "S311", "S101", "ASYNC251"]
+# ASYNC109: test backends implement httpcore's AsyncNetworkBackend interface, whose
+# `timeout` parameter is part of the contract.
+# S104/S108: the network tests bind a throwaway server to all interfaces and pass a
+# throwaway path to the unix-socket refusal path.
+"tests/*" = ["S105", "S106", "S311", "S101", "ASYNC251", "ASYNC109", "S104", "S108"]
 # T201: these are operator-facing command-line tools. Their output is the interface, so
 # print is correct here; the service itself logs through structlog.
 "src/humisense/devtools/*" = ["S105", "S106", "T201"]
@@ -74,6 +78,9 @@ ignore = [
 "src/humisense/config.py" = ["S105"]
 # Retry jitter is not a security decision; secrets use the secrets module.
 "src/humisense/services/ingestion.py" = ["S311"]
+# ASYNC109: the pinned transport implements httpcore's AsyncNetworkBackend interface, so
+# the `timeout` parameter is part of the contract and cannot be replaced by asyncio.timeout.
+"src/humisense/security/pinned_transport.py" = ["ASYNC109"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["humisense"]

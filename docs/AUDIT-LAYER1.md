@@ -22,13 +22,17 @@ were all verified against a live stack, not merely observed in tests.
 
 The gaps that exist are **honesty and finishing gaps, not architecture gaps**: the
 documentation claimed test files, tooling, and controls that did not exist; a performance
-defect made a full CSV sync quadratic in the row count; and the documented quick start did
-not work from the documented directory. All three are now fixed.
+defect made a full CSV sync quadratic in the row count; the documented quick start did not
+work from the documented directory; the egress policy was exposed to DNS rebinding; and
+there was no deployment artifact. All are now fixed except the supply-chain tooling and
+frontend-coverage items tracked in section 7.
 
 **Recommendation**: proceed as a production-readiness candidate for a controlled,
-single-tenant pilot after the P1 items in section 7 are closed. Do **not** onboard
-multi-tenant enterprise data until F5 (egress DNS rebinding) and the deployment-hardening
-items are addressed, and a third-party penetration test has been performed.
+single-tenant pilot. F5 (egress DNS rebinding) and F7 (deployment artifacts) are now
+closed, and the deployment gate requires verified database TLS that is enforced on the
+connection, not merely checked at startup. Do **not** onboard multi-tenant enterprise data
+until F4 (supply-chain tooling), F8 (frontend tests), and F9 (rate limiter fail-open) are
+addressed and a third-party penetration test has been performed.
 
 ## 2. Evidence gathered (reproduced, not assumed)
 
@@ -64,9 +68,9 @@ applied. Findings were then reproduced against the live system.
 | F2 | Medium | Documentation referenced test files, a `tools/` directory, `docs/SECRETS.md`, and CI tooling that did not exist | **Fixed** |
 | F3 | Medium | Default `csv_allowed_roots` was working-directory-relative, so the documented quick start failed closed | **Fixed** |
 | F4 | Medium | Supply-chain tooling claimed in the threat model (semgrep, trivy, SBOM) is absent from CI | Doc corrected; tooling open |
-| F5 | Medium | Egress policy is TOCTOU-exposed to DNS rebinding (validates one resolution, connects with another) | Documented; fix open |
-| F6 | Low | Metrics are recorded in-process but no scrape endpoint exists; `METRICS_ENABLED` is unused | Doc corrected; fix open |
-| F7 | Low | No container, compose, or orchestration artifacts; no image scanning target | Open |
+| F5 | Medium | Egress policy is TOCTOU-exposed to DNS rebinding (validates one resolution, connects with another) | **Fixed** |
+| F6 | Low | Metrics are recorded in-process but no scrape endpoint exists; `METRICS_ENABLED` is unused | **Fixed** |
+| F7 | Low | No container, compose, or orchestration artifacts; no image scanning target | **Fixed** |
 | F8 | Low | Frontend test coverage is one file (API client); no component or page tests | Open |
 | F9 | Low | Rate limiter fails open to a per-process in-memory backend when Redis is unavailable | Documented; accepted for now |
 | F10 | Info | No pull-request template in the repository | Open |
@@ -145,34 +149,93 @@ repository, so image scanning has no target yet. The documentation now states wh
 actually enforced and names the gaps. Adding `semgrep` (SAST depth) and SBOM generation
 (`syft`/`cyclonedx`) is recommended before a pilot.
 
-### F5 — Egress DNS rebinding (Medium) — documented, fix open
+### F5 — Egress DNS rebinding (Medium) — fixed
 
 `EgressPolicy.validate()` resolves the hostname and checks the resulting addresses, but
-then hands the *hostname* to `httpx`, which resolves it again at connect time. An attacker
-controlling DNS can answer the validation lookup with a public address and the connection
-lookup with a private one (TOCTOU). This is the classic DNS-rebinding gap and is called
-out explicitly in the OWASP SSRF Prevention Cheat Sheet. The prior documentation
-described this as "mitigated"; it is not. The residual-risk text now states it accurately.
+then handed the *hostname* to `httpx`, which resolved it again at connect time. An attacker
+controlling DNS could answer the validation lookup with a public address and the connection
+lookup with a private one (TOCTOU). This is the classic DNS-rebinding gap called out in the
+OWASP SSRF Prevention Cheat Sheet. The prior documentation described this as "mitigated";
+it was not.
 
-The correct fix is to connect to the validated IP while preserving the hostname for the
-`Host` header, TLS SNI, and certificate verification. The default posture (HTTPS required,
-destination allowlist) meaningfully raises the bar, which is why this is Medium rather
-than High.
+The fix connects to the validated IP while preserving the hostname for the `Host` header,
+TLS SNI, and certificate verification:
 
-### F6 — Metrics recorded but not observable (Low) — documentation corrected
+- `EgressPolicy.resolve_for_connection(hostname, port)` resolves once, validates the
+  addresses, and returns the pinned address together with the original hostname. It now
+  also takes the port, so a port rule is evaluated against the same resolution that is
+  connected to (defense in depth).
+- `PinnedAsyncNetworkBackend` in `backend/src/humisense/security/pinned_transport.py`
+  performs the socket connection to the pinned address and refuses unix sockets outright,
+  so the pin cannot be bypassed by an alternative transport. TLS is established with an
+  `ssl.SSLContext` built by `httpx.create_ssl_context(..., trust_env=False)`, so a
+  host-level proxy environment variable cannot silently redirect the connection.
 
-`Metrics` records counters and histograms, but no route exposes them (`/metrics` does not
-exist) and `METRICS_ENABLED` is defined but never read. Operators therefore cannot scrape
-the data the code collects. The architecture document now says so. Either add an
-authenticated scrape endpoint or drop the claim; leaving the flag unread is a trap.
+The address identity is re-established at connect time, defeating the second DNS lookup.
+Verified by `backend/tests/test_security_egress_pinning.py` (34 tests), including a test
+that forces a differing second resolution and asserts the connection still goes to the
+validated address.
 
-### F7 — No deployment artifacts (Low) — open
+### F6 — Metrics recorded but not observable (Low) — fixed
 
-There is no `Dockerfile`, compose file, or orchestration manifest. The architecture
-document refers to "non-root minimal container images" that do not exist in the
-repository. For a "production-readiness candidate" this is a real gap: there is no
+`Metrics` recorded counters and histograms, but no route exposed them (`/metrics` did not
+exist) and `METRICS_ENABLED` was defined but never read. Operators therefore could not
+scrape the data the code collected, and the flag was a trap.
+
+The fix adds an authenticated scrape endpoint:
+
+- `GET /api/v1/metrics` (`backend/src/humisense/api/routers/metrics.py`) returns the
+  Prometheus exposition text.
+- It requires the new `metrics:read` permission, which is granted to `admin` and `owner`
+  and denied to `viewer` and `operator`. The registry carries no tenant label, so the
+  endpoint exposes aggregate process metrics, not tenant data.
+- The route is registered only when `settings.metrics_enabled` is true, so a disabled
+  deployment has no route at all rather than a disabled-but-reachable one.
+
+Verified by `backend/tests/test_api_metrics.py`: anonymous access is 401, a viewer is 403,
+an admin is 200, the body is valid Prometheus text with no tenant identifier, and the route
+is 404 when disabled.
+
+### F7 — No deployment artifacts (Low) — fixed
+
+There was no `Dockerfile`, compose file, or orchestration manifest, so there was no
 reproducible way to build and run the service outside a developer machine, and no image to
-scan. This is the largest remaining production-readiness item after F5.
+scan.
+
+The fix adds a container build and a single-node reference deployment:
+
+- `ops/docker/backend.Dockerfile` builds a multi-stage image that runs as uid 10001
+  (non-root) with a read-only root filesystem.
+- `ops/docker/frontend.Dockerfile` builds the frontend and serves it from
+  `nginxinc/nginx-unprivileged:1.27.3-alpine` as uid 101.
+- `ops/docker/tls.Dockerfile` and `ops/postgres/generate-tls.sh` produce the database CA
+  and server certificate for the reference stack.
+- `ops/compose/docker-compose.yml` wires PostgreSQL, Redis, the API, the worker, and the
+  frontend onto private networks, with no published database or Redis port and only the
+  frontend bound to host loopback.
+- `ops/compose/.env.example` documents every required value; no credential is committed.
+
+The API runs in `APP_ENV=production` in this stack, so it is subject to the same startup
+gate as a real deployment. That gate requires verified TLS to the database, so the compose
+file pins `DATABASE_REQUIRE_TLS=true` and mounts the generated CA. The requirement is never
+disabled to make the stack boot. Verified end to end: `docker compose up -d` reaches all
+services healthy, and `pg_stat_ssl` reports `t|TLSv1.3|TLS_AES_256_GCM_SHA384` for the
+application's connection.
+
+Two follow-on defects were found and fixed while building the images:
+
+- `.dockerignore` excluded `.venv/` but not `backend/.venv/`, so the host development
+  virtualenv was copied into the image and shadowed the container's own `uvicorn` script.
+  The patterns are now recursive (`**/.venv/`).
+- `ops/postgres/init.sql` hardcoded the development role password, so the compose
+  `HUMISENSE_APP_PASSWORD` was ignored and the API could not authenticate. The script now
+  reads the password from the environment with the development value as a fallback.
+
+Also fixed in this pass: `database_require_tls` was required by the production gate but
+never enforced on the engine, so a "production-ready" deployment still connected in
+plaintext. `Settings.database_connect_args` now builds a verifying `ssl.SSLContext` (with
+the configured CA when `database_tls_ca_path` is set) and both the application engine and
+the Alembic migration engine pass it to asyncpg.
 
 ### F8 — Thin frontend test coverage (Low) — open
 
@@ -229,20 +292,28 @@ These were confirmed by independent reproduction, not by reading tests.
 - No HA or multi-region claim is made. Single-region, single-database.
 - Layer 1 has no LLM and no agent, so prompt injection has no surface yet; the envelope
   carries provenance for the layer that will.
-- DNS rebinding (F5) remains an open, documented gap.
+- The reference compose stack is single-node and is not a high-availability topology.
+- The database TLS material the reference stack generates is self-signed and exists so the
+  stack exercises the same verified-TLS path production uses. A real deployment replaces it
+  with certificates from its own CA.
+- F4 (semgrep, SBOM), F8 (frontend tests), F9 (rate limiter fail-open), and F10 (PR
+  template) remain open; they are tracked in section 7.
 
 ## 7. Prioritized remediation
 
 **P1 — before a controlled pilot**
-1. F5: close the DNS-rebinding gap (connect to the validated IP; preserve hostname for
-   Host/SNI/cert verification). Add a test that forces a differing second resolution.
-2. F7: add a container build and a compose file so the service is deployable and scannable;
-   run as a non-root user.
+1. F5: **closed.** Egress connects to the validated address with the hostname preserved for
+   Host/SNI/cert verification; `test_security_egress_pinning.py` forces a differing second
+   resolution and asserts the pin holds.
+2. F7: **closed.** Container builds and a compose file exist; the images run as non-root
+   and are now a target for image scanning.
 3. F10: add a pull-request template with an explicit security-boundary checklist.
 
 **P2 — before multi-tenant enterprise data**
-4. F4: add `semgrep` and SBOM generation to CI; add image scanning once F7 lands.
-5. F6: expose metrics on an authenticated endpoint (or remove the dead flag).
+4. F4: add `semgrep` and SBOM generation to CI; add image scanning (the F7 images are now a
+   target).
+5. F6: **closed.** Metrics are exposed on an authenticated endpoint gated by `metrics:read`
+   and by `settings.metrics_enabled`.
 6. F9: alert on `rate_limit_degraded`, and document the fail-open behaviour as accepted.
 7. Commission the third-party penetration test the docs already promise.
 
@@ -259,6 +330,18 @@ Fixes are in this change set; each carries a regression test.
   tests in `backend/tests/test_csv_connector.py`.
 - F3: `backend/src/humisense/config.py` — anchor relative CSV roots to the repository root;
   tests in `backend/tests/test_config_hardening.py`.
-- F2/F4/F6: `docs/THREAT_MODEL.md`, `docs/ARCHITECTURE.md`, `docs/CANARY.md`,
+- F2/F4: `docs/THREAT_MODEL.md`, `docs/ARCHITECTURE.md`, `docs/CANARY.md`,
   `backend/src/humisense/db/models.py`, `backend/src/humisense/devtools/cli.py`; new
   `docs/SECRETS.md`.
+- F5: `backend/src/humisense/security/egress.py`,
+  `backend/src/humisense/security/pinned_transport.py`; tests in
+  `backend/tests/test_security_egress_pinning.py`.
+- F6: `backend/src/humisense/api/routers/metrics.py`,
+  `backend/src/humisense/security/permissions.py`, `backend/src/humisense/app.py`; tests in
+  `backend/tests/test_api_metrics.py`.
+- F7: `ops/docker/*.Dockerfile`, `ops/docker/entrypoint.sh`, `ops/docker/nginx.conf`,
+  `ops/compose/docker-compose.yml`, `ops/compose/.env.example`,
+  `ops/postgres/generate-tls.sh`, `.dockerignore`.
+- Database TLS enforcement: `backend/src/humisense/config.py` (`database_connect_args`,
+  `database_tls_ca_path`), `backend/src/humisense/db/session.py`,
+  `backend/alembic/env.py`; tests in `backend/tests/test_config_hardening.py`.

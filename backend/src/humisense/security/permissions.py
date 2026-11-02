@@ -35,6 +35,8 @@ class Permission(str, enum.Enum):
     MEMBERS_MANAGE = "members:manage"
     ORGANIZATION_READ = "organization:read"
 
+    METRICS_READ = "metrics:read"
+
 
 VIEWER_PERMISSIONS: Final[frozenset[Permission]] = frozenset(
     {
@@ -62,6 +64,9 @@ ADMIN_PERMISSIONS: Final[frozenset[Permission]] = OPERATOR_PERMISSIONS | frozens
         Permission.AUDIT_READ,
         Permission.SECRETS_WRITE,
         Permission.MEMBERS_READ,
+        # Operational visibility is an administrator capability. The registry carries no
+        # tenant label, so this grants aggregate process metrics, not tenant data.
+        Permission.METRICS_READ,
     }
 )
 

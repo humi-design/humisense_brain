@@ -136,6 +136,27 @@ docker compose --env-file ops/compose/.env -f ops/compose/docker-compose.yml \
 This is not zero-downtime: there is one API replica, so there is a brief gap while it
 restarts. A zero-downtime upgrade needs at least two replicas and a rolling strategy.
 
+## Layer 4 (work intelligence) operation
+
+Layer 4 adds migration `0004_layer4` and the `work_*` tables. No new service, dependency, or
+infrastructure is introduced.
+
+- **Scheduled derivation is opt-in.** `LAYER4_SWEEP_ENABLED` defaults to `false`. The worker
+  registers the sweep task either way, but it is a no-op until enabled. Set
+  `LAYER4_SWEEP_WINDOW_HOURS` and `LAYER4_SWEEP_ROW_LIMIT` before enabling it.
+- **Manual derivation.** `POST /api/v1/work/run` runs a bounded derivation for the caller's
+  tenant and requires the `work:manage` permission. It is safe to repeat: derivation is an
+  idempotent upsert on natural keys.
+- **Backfill.** For historical data, call the run endpoint (or the engine) repeatedly with
+  adjacent windows rather than one unbounded run. The engine is bounded and idempotent, so
+  repeated windows do not double-count.
+- **Event publication.** Layer 4's transactional outbox (`work_outbox_events`) is written
+  durable-first. Publication is `disabled` unless configured; it never writes a work entity,
+  so it cannot create an event loop.
+- **Measurement.** `uv run python -m humisense.devtools.cli work-benchmark --records N`
+  measures derivation and read-model latency against the current database. Recorded numbers
+  are in `docs/LAYER4-RELEASE.md`.
+
 ## Operational visibility
 
 The API exposes Prometheus metrics at `GET /api/v1/metrics`, authenticated and gated by the

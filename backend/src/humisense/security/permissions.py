@@ -43,6 +43,12 @@ class Permission(str, enum.Enum):
     ANALYTICS_RUN = "analytics:run"
     ANALYTICS_CONFIGURE = "analytics:configure"
 
+    # Layer 4. Reading work is visibility. Changing work state (status, ownership, an
+    # authorized conflict resolution) is an operator capability because it alters the
+    # organization's record of who is responsible for what.
+    WORK_READ = "work:read"
+    WORK_MANAGE = "work:manage"
+
     SECRETS_WRITE = "secrets:write"
     MEMBERS_READ = "members:read"
     MEMBERS_MANAGE = "members:manage"
@@ -60,6 +66,7 @@ VIEWER_PERMISSIONS: Final[frozenset[Permission]] = frozenset(
         Permission.ORGANIZATION_READ,
         Permission.INGESTION_READ,
         Permission.ANALYTICS_READ,
+        Permission.WORK_READ,
     }
 )
 
@@ -69,6 +76,7 @@ OPERATOR_PERMISSIONS: Final[frozenset[Permission]] = VIEWER_PERMISSIONS | frozen
         Permission.SYNC_RUN,
         Permission.SYNC_CANCEL,
         Permission.ANALYTICS_RUN,
+        Permission.WORK_MANAGE,
     }
 )
 

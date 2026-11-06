@@ -186,3 +186,314 @@ export const overviewSchema = z.object({
   ingestion_sink: z.string(),
   layer2_configured: z.boolean(),
 });
+
+// --- Layer 4: work intelligence ---------------------------------------------------
+
+export const workSourceReferenceSchema = z.object({
+  canonical_record_id: z.string(),
+  source_system: z.string(),
+  source_record_key: z.string(),
+  source_record_type: z.string(),
+  relationship: z.enum(["primary", "supporting", "mentioned"]),
+  confidence: z.number().nullable(),
+});
+
+export const workAssignmentSchema = z.object({
+  participant_type: z.string(),
+  user_id: z.string().nullable(),
+  department_id: z.string().nullable(),
+  external_name: z.string().nullable(),
+  role: z.string(),
+  verification: z.string(),
+  confidence: z.number().nullable(),
+});
+
+export const workPrioritySchema = z.object({
+  level: z.string(),
+  source: z.string(),
+  overdue: z.boolean(),
+  due_soon: z.boolean(),
+  blocked: z.boolean(),
+  dependency_count: z.number(),
+  waiting_duration_seconds: z.number().nullable(),
+  commitment_status: z.string().nullable(),
+  source_completeness: z.number(),
+  related_detection_ids: z.array(z.string()),
+  computed_at: z.string().nullable(),
+});
+
+export const workEntitySchema = z.object({
+  work_id: z.string(),
+  work_key: z.string(),
+  work_type: z.string(),
+  title: z.string(),
+  description: z.string().nullable(),
+  domain: z.string(),
+  department_id: z.string().nullable(),
+  owner_id: z.string().nullable(),
+  assigned_user_id: z.string().nullable(),
+  priority: z.string(),
+  priority_source: z.string(),
+  status: z.string(),
+  source_status: z.string().nullable(),
+  origin: z.string(),
+  confidence: z.number().nullable(),
+  start_at: z.string().nullable(),
+  due_at: z.string().nullable(),
+  due_source: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  customer_ref: z.string().nullable(),
+  supplier_ref: z.string().nullable(),
+  order_ref: z.string().nullable(),
+  project_ref: z.string().nullable(),
+  machine_ref: z.string().nullable(),
+  production_ref: z.string().nullable(),
+  attributes: z.record(z.string(), z.unknown()),
+  schema_version: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const workTimelineEventSchema = z.object({
+  event_id: z.string(),
+  work_id: z.string(),
+  event_type: z.string(),
+  event_at: z.string(),
+  source_timestamp: z.string().nullable(),
+  ingested_at: z.string(),
+  processed_at: z.string(),
+  actor_id: z.string().nullable(),
+  actor_type: z.string(),
+  previous_state: z.record(z.string(), z.unknown()).nullable(),
+  new_state: z.record(z.string(), z.unknown()).nullable(),
+  source_reference: z.record(z.string(), z.unknown()).nullable(),
+  provenance: z.string(),
+  correlation_id: z.string(),
+});
+
+export const workCommitmentSchema = z.object({
+  commitment_id: z.string(),
+  work_id: z.string().nullable(),
+  commitment_type: z.string(),
+  description: z.string(),
+  committing_party: z.string(),
+  receiving_party: z.string(),
+  responsible_owner: z.string().nullable(),
+  related_customer_ref: z.string().nullable(),
+  related_supplier_ref: z.string().nullable(),
+  related_order_ref: z.string().nullable(),
+  promised_at: z.string().nullable(),
+  due_at: z.string().nullable(),
+  actual_completion_at: z.string().nullable(),
+  commitment_status: z.string(),
+  verification_status: z.string(),
+  confidence: z.number().nullable(),
+  source_reference: z.string().nullable(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const workDependencySchema = z.object({
+  dependency_id: z.string(),
+  source_work_id: z.string(),
+  target_work_id: z.string().nullable(),
+  target_entity_type: z.string(),
+  target_entity_ref: z.string().nullable(),
+  relationship: z.string(),
+  status: z.string(),
+  origin: z.string(),
+  verification_status: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+
+export const workBlockerSchema = z.object({
+  blocker_id: z.string(),
+  affected_work_id: z.string(),
+  blocker_type: z.string(),
+  description: z.string(),
+  blocking_entity: z.string().nullable(),
+  responsible_department_id: z.string().nullable(),
+  detected_at: z.string(),
+  expected_resolution_at: z.string().nullable(),
+  blocker_status: z.string(),
+  evidence_references: z.array(z.record(z.string(), z.unknown())),
+  provenance: z.string(),
+  verification_status: z.string(),
+});
+
+export const workFollowUpSchema = z.object({
+  follow_up_id: z.string(),
+  related_work_id: z.string(),
+  target_type: z.string(),
+  target_ref: z.string(),
+  owner_id: z.string().nullable(),
+  reason: z.string(),
+  last_activity_at: z.string().nullable(),
+  next_due_at: z.string().nullable(),
+  urgency: z.string(),
+  follow_up_status: z.string(),
+  rule_id: z.string(),
+  provenance: z.string(),
+});
+
+export const workConflictSchema = z.object({
+  conflict_id: z.string(),
+  work_id: z.string().nullable(),
+  entity_type: z.string(),
+  entity_key: z.string(),
+  conflict_type: z.string(),
+  detail: z.string(),
+  candidates: z.array(z.record(z.string(), z.unknown())),
+  status: z.string(),
+  resolved_value: z.record(z.string(), z.unknown()).nullable(),
+  resolved_by: z.string().nullable(),
+  resolution_note: z.string().nullable(),
+  detected_at: z.string(),
+  resolved_at: z.string().nullable(),
+});
+
+export const workSummaryItemSchema = z.object({
+  work_id: z.string(),
+  title: z.string(),
+  work_type: z.string(),
+  domain: z.string(),
+  status: z.string(),
+  priority: z.string(),
+  due_at: z.string().nullable(),
+  overdue: z.boolean(),
+  due_soon: z.boolean(),
+  blocked: z.boolean(),
+  owner_id: z.string().nullable(),
+  department_id: z.string().nullable(),
+  updated_at: z.string(),
+});
+
+export const workListSchema = z.object({
+  items: z.array(workEntitySchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export const workDetailSchema = workEntitySchema.extend({
+  source_references: z.array(workSourceReferenceSchema),
+  assignments: z.array(workAssignmentSchema),
+  commitments: z.array(workCommitmentSchema),
+  dependencies: z.array(workDependencySchema),
+  blockers: z.array(workBlockerSchema),
+  priorities: z.array(workPrioritySchema),
+  timeline: z.array(workTimelineEventSchema),
+});
+
+export const myWorkSchema = z.object({
+  as_of: z.string(),
+  my_work: z.array(workSummaryItemSchema),
+  overdue: z.array(workSummaryItemSchema),
+  due_soon: z.array(workSummaryItemSchema),
+  waiting_for_me: z.array(workSummaryItemSchema),
+  waiting_on_others: z.array(workSummaryItemSchema),
+  counts: z.record(z.string(), z.number()),
+});
+
+export const departmentSchema = z.object({
+  department_id: z.string(),
+  department_key: z.string(),
+  name: z.string(),
+  domain: z.string(),
+  is_active: z.boolean(),
+});
+
+export const departmentListSchema = z.object({
+  items: z.array(departmentSchema),
+});
+
+export const departmentOverviewSchema = z.object({
+  department_id: z.string().nullable(),
+  as_of: z.string(),
+  status_counts: z.record(z.string(), z.number()),
+  open_work: z.number(),
+  overdue: z.number(),
+  blocked: z.number(),
+  unassigned: z.number(),
+  items: z.array(workSummaryItemSchema),
+});
+
+export const executiveOverviewSchema = z.object({
+  as_of: z.string(),
+  critical_work: z.array(workSummaryItemSchema),
+  overdue_high_priority: z.array(workSummaryItemSchema),
+  blocked_items: z.array(workSummaryItemSchema),
+  counts: z.record(z.string(), z.number()),
+});
+
+export const commitmentListSchema = z.object({
+  items: z.array(workCommitmentSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export const dependencyListSchema = z.object({
+  items: z.array(workDependencySchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export const blockerListSchema = z.object({
+  items: z.array(workBlockerSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export const followUpListSchema = z.object({
+  items: z.array(workFollowUpSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export const conflictListSchema = z.object({
+  items: z.array(workConflictSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+export const workflowStepSchema = z.object({
+  step_key: z.string(),
+  step_name: z.string(),
+  step_order: z.number(),
+  responsible_role: z.string().nullable(),
+  observed_state: z.string(),
+  depends_on: z.array(z.string()),
+});
+
+export const workflowInstanceSchema = z.object({
+  instance_id: z.string(),
+  definition_id: z.string(),
+  work_id: z.string(),
+  workflow_key: z.string(),
+  workflow_name: z.string(),
+  workflow_type: z.string(),
+  version: z.number(),
+  status: z.string(),
+  current_step_key: z.string().nullable(),
+  steps: z.array(workflowStepSchema),
+});
+
+export const workflowInstanceListSchema = z.object({
+  items: z.array(workflowInstanceSchema),
+  total: z.number(),
+});
+
+export const workRunSchema = z.object({
+  organization_id: z.string(),
+  correlation_id: z.string(),
+  job_type: z.string(),
+  status: z.string(),
+  counters: z.record(z.string(), z.number()),
+  skips: z.array(z.record(z.string(), z.string())),
+});

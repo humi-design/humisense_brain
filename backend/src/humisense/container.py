@@ -22,7 +22,10 @@ from humisense.layer2.receiver import IngestionReceiver
 from humisense.layer2.replay import QuarantineService
 from humisense.layer3.engine import AnalyticsEngine
 from humisense.layer3.repository import AnalyticsRepository
-from humisense.observability.metrics import Metrics
+from humisense.layer4.engine import WorkIntelligenceEngine
+from humisense.layer4.policy import WorkPolicy
+from humisense.layer4.repository import WorkRepository
+from humisense.observability.metrics import Metrics, WorkMetrics
 from humisense.secrets.base import SecretsProvider
 from humisense.secrets.factory import build_secrets_provider
 from humisense.security.identity import TokenVerifier, build_token_verifier
@@ -33,6 +36,7 @@ from humisense.services.ingestion import IngestionService, build_ingestion_servi
 from humisense.services.records import RecordService
 from humisense.services.runtime import ConnectorRuntime
 from humisense.services.sync import SyncService
+from humisense.services.work import WorkService
 from humisense.workers.queue import SyncJobPayload, TaskQueue, build_task_queue
 
 logger = structlog.get_logger(__name__)
@@ -58,6 +62,9 @@ class Container:
     layer2_outbox: OutboxPublisher
     layer3_repository: AnalyticsRepository
     layer3_engine: AnalyticsEngine
+    layer4_repository: WorkRepository
+    layer4_engine: WorkIntelligenceEngine
+    work: WorkService
     token_verifier: TokenVerifier
     rate_limiter: RateLimiter
     task_queue: TaskQueue
@@ -130,6 +137,21 @@ def build_container(settings: Settings, *, inline_runner: Any = None) -> Contain
     layer3_repository = AnalyticsRepository(database)
     layer3_engine = AnalyticsEngine(layer3_repository, settings, metrics=metrics)
 
+    work_metrics = WorkMetrics()
+    layer4_repository = WorkRepository(database)
+    layer4_engine = WorkIntelligenceEngine(
+        layer4_repository,
+        settings,
+        metrics=metrics,
+        work_metrics=work_metrics,
+        policy=WorkPolicy(
+            due_soon_hours=settings.layer4_due_soon_hours,
+            response_window_hours=settings.layer4_followup_response_hours,
+            unresolved_window_hours=settings.layer4_followup_unresolved_hours,
+        ),
+    )
+    work = WorkService(layer4_repository, audit)
+
     token_verifier = build_token_verifier(settings)
     rate_limiter = build_rate_limiter(settings.redis_url, enabled=settings.rate_limit_enabled)
 
@@ -155,6 +177,9 @@ def build_container(settings: Settings, *, inline_runner: Any = None) -> Contain
         layer2_outbox=layer2_outbox,
         layer3_repository=layer3_repository,
         layer3_engine=layer3_engine,
+        layer4_repository=layer4_repository,
+        layer4_engine=layer4_engine,
+        work=work,
         token_verifier=token_verifier,
         rate_limiter=rate_limiter,
         task_queue=task_queue,

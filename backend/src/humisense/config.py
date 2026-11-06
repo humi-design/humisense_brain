@@ -165,6 +165,22 @@ class Settings(BaseSettings):
     layer3_sweep_row_limit: int = 20_000
     """Upper bound on canonical records one scheduled run reads per tenant."""
 
+    # --- Layer 4 work intelligence ----------------------------------------
+    layer4_sweep_enabled: bool = False
+    """Whether the worker runs the scheduled work derivation sweep. Disabled by default: a
+    deployment that has not sized its windows should not have work derived on a timer it did
+    not ask for. The API run endpoint works either way."""
+    layer4_sweep_window_hours: int = 24
+    """How far back each scheduled derivation run looks."""
+    layer4_sweep_row_limit: int = 5_000
+    """Upper bound on canonical records one scheduled derivation run reads per tenant."""
+    layer4_due_soon_hours: int = 24
+    """The window for the ``due_soon`` indicator and approaching-deadline events."""
+    layer4_followup_response_hours: int = 72
+    """How long a communication may go unanswered before a follow-up is suggested."""
+    layer4_followup_unresolved_hours: int = 336
+    """How long work may stay unstarted or blocked before a follow-up is suggested."""
+
     # --- Resource protection ---------------------------------------------
     rate_limit_enabled: bool = True
     task_queue_mode: Literal["arq", "inline"] = "arq"

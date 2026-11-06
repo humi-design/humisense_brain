@@ -11,6 +11,8 @@ backend, not by frontend visibility.
 - Architecture and threat model: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)
 - Canary Labs status and access requirements: [`docs/CANARY.md`](docs/CANARY.md)
 - Layer 2 (ingestion engine) design and release evidence: [`docs/LAYER2-ARCHITECTURE.md`](docs/LAYER2-ARCHITECTURE.md), [`docs/LAYER2-RELEASE.md`](docs/LAYER2-RELEASE.md)
+- Layer 3 (analytics and detection): [`docs/LAYER3-ARCHITECTURE.md`](docs/LAYER3-ARCHITECTURE.md)
+- Layer 4 (work intelligence engine): [`docs/LAYER4-ARCHITECTURE.md`](docs/LAYER4-ARCHITECTURE.md), [`docs/LAYER4-WORK-DOMAIN.md`](docs/LAYER4-WORK-DOMAIN.md), [`docs/LAYER4-RELEASE.md`](docs/LAYER4-RELEASE.md)
 
 ## Status at a glance
 
@@ -22,6 +24,8 @@ backend, not by frontend visibility.
 | React operator UI | Working, talks to the real API |
 | Tenant isolation (RLS) | Enforced and tested |
 | Layer 2 handoff | Defined and tested (local test receiver) |
+| Layer 3 (analytics and detection) | Working, tested |
+| Layer 4 (work intelligence) | Working, tested; derivation is opt-in on a timer |
 | Background sync (arq) | Working, tested |
 
 ## Layout

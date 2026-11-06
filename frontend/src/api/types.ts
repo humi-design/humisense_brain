@@ -216,3 +216,318 @@ export interface Overview {
   ingestion_sink: string;
   layer2_configured: boolean;
 }
+
+// --- Layer 4: work intelligence ---------------------------------------------------
+//
+// These mirror the Layer 4 response models. A derived value always carries its provenance
+// and confidence, and an unresolved field is `null`, never a fabricated value. Nothing
+// here is a performance score: the counts are counts.
+
+export interface WorkSourceReference {
+  canonical_record_id: string;
+  source_system: string;
+  source_record_key: string;
+  source_record_type: string;
+  relationship: "primary" | "supporting" | "mentioned";
+  confidence: number | null;
+}
+
+export interface WorkAssignment {
+  participant_type: string;
+  user_id: string | null;
+  department_id: string | null;
+  external_name: string | null;
+  role: string;
+  verification: string;
+  confidence: number | null;
+}
+
+export interface WorkPriority {
+  level: string;
+  source: string;
+  overdue: boolean;
+  due_soon: boolean;
+  blocked: boolean;
+  dependency_count: number;
+  waiting_duration_seconds: number | null;
+  commitment_status: string | null;
+  source_completeness: number;
+  related_detection_ids: string[];
+  computed_at: string | null;
+}
+
+export interface WorkEntity {
+  work_id: string;
+  work_key: string;
+  work_type: string;
+  title: string;
+  description: string | null;
+  domain: string;
+  department_id: string | null;
+  owner_id: string | null;
+  assigned_user_id: string | null;
+  priority: string;
+  priority_source: string;
+  status: string;
+  source_status: string | null;
+  origin: string;
+  confidence: number | null;
+  start_at: string | null;
+  due_at: string | null;
+  due_source: string | null;
+  completed_at: string | null;
+  customer_ref: string | null;
+  supplier_ref: string | null;
+  order_ref: string | null;
+  project_ref: string | null;
+  machine_ref: string | null;
+  production_ref: string | null;
+  attributes: Record<string, unknown>;
+  schema_version: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkTimelineEvent {
+  event_id: string;
+  work_id: string;
+  event_type: string;
+  event_at: string;
+  source_timestamp: string | null;
+  ingested_at: string;
+  processed_at: string;
+  actor_id: string | null;
+  actor_type: string;
+  previous_state: Record<string, unknown> | null;
+  new_state: Record<string, unknown> | null;
+  source_reference: Record<string, unknown> | null;
+  provenance: string;
+  correlation_id: string;
+}
+
+export interface WorkCommitment {
+  commitment_id: string;
+  work_id: string | null;
+  commitment_type: string;
+  description: string;
+  committing_party: string;
+  receiving_party: string;
+  responsible_owner: string | null;
+  related_customer_ref: string | null;
+  related_supplier_ref: string | null;
+  related_order_ref: string | null;
+  promised_at: string | null;
+  due_at: string | null;
+  actual_completion_at: string | null;
+  commitment_status: string;
+  verification_status: string;
+  confidence: number | null;
+  source_reference: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkDependency {
+  dependency_id: string;
+  source_work_id: string;
+  target_work_id: string | null;
+  target_entity_type: string;
+  target_entity_ref: string | null;
+  relationship: string;
+  status: string;
+  origin: string;
+  verification_status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkBlocker {
+  blocker_id: string;
+  affected_work_id: string;
+  blocker_type: string;
+  description: string;
+  blocking_entity: string | null;
+  responsible_department_id: string | null;
+  detected_at: string;
+  expected_resolution_at: string | null;
+  blocker_status: string;
+  evidence_references: Record<string, unknown>[];
+  provenance: string;
+  verification_status: string;
+}
+
+export interface WorkFollowUp {
+  follow_up_id: string;
+  related_work_id: string;
+  target_type: string;
+  target_ref: string;
+  owner_id: string | null;
+  reason: string;
+  last_activity_at: string | null;
+  next_due_at: string | null;
+  urgency: string;
+  follow_up_status: string;
+  rule_id: string;
+  provenance: string;
+}
+
+export interface WorkConflict {
+  conflict_id: string;
+  work_id: string | null;
+  entity_type: string;
+  entity_key: string;
+  conflict_type: string;
+  detail: string;
+  candidates: Record<string, unknown>[];
+  status: string;
+  resolved_value: Record<string, unknown> | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+  detected_at: string;
+  resolved_at: string | null;
+}
+
+export interface WorkSummaryItem {
+  work_id: string;
+  title: string;
+  work_type: string;
+  domain: string;
+  status: string;
+  priority: string;
+  due_at: string | null;
+  overdue: boolean;
+  due_soon: boolean;
+  blocked: boolean;
+  owner_id: string | null;
+  department_id: string | null;
+  updated_at: string;
+}
+
+export interface WorkList {
+  items: WorkEntity[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WorkDetail extends WorkEntity {
+  source_references: WorkSourceReference[];
+  assignments: WorkAssignment[];
+  commitments: WorkCommitment[];
+  dependencies: WorkDependency[];
+  blockers: WorkBlocker[];
+  priorities: WorkPriority[];
+  timeline: WorkTimelineEvent[];
+}
+
+export interface MyWork {
+  as_of: string;
+  my_work: WorkSummaryItem[];
+  overdue: WorkSummaryItem[];
+  due_soon: WorkSummaryItem[];
+  waiting_for_me: WorkSummaryItem[];
+  waiting_on_others: WorkSummaryItem[];
+  counts: Record<string, number>;
+}
+
+export interface Department {
+  department_id: string;
+  department_key: string;
+  name: string;
+  domain: string;
+  is_active: boolean;
+}
+
+export interface DepartmentList {
+  items: Department[];
+}
+
+export interface DepartmentOverview {
+  department_id: string | null;
+  as_of: string;
+  status_counts: Record<string, number>;
+  open_work: number;
+  overdue: number;
+  blocked: number;
+  unassigned: number;
+  items: WorkSummaryItem[];
+}
+
+export interface ExecutiveOverview {
+  as_of: string;
+  critical_work: WorkSummaryItem[];
+  overdue_high_priority: WorkSummaryItem[];
+  blocked_items: WorkSummaryItem[];
+  counts: Record<string, number>;
+}
+
+export interface CommitmentList {
+  items: WorkCommitment[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DependencyList {
+  items: WorkDependency[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface BlockerList {
+  items: WorkBlocker[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface FollowUpList {
+  items: WorkFollowUp[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface ConflictList {
+  items: WorkConflict[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WorkflowStep {
+  step_key: string;
+  step_name: string;
+  step_order: number;
+  responsible_role: string | null;
+  observed_state: string;
+  depends_on: string[];
+}
+
+export interface WorkflowInstance {
+  instance_id: string;
+  definition_id: string;
+  work_id: string;
+  workflow_key: string;
+  workflow_name: string;
+  workflow_type: string;
+  version: number;
+  status: string;
+  current_step_key: string | null;
+  steps: WorkflowStep[];
+}
+
+export interface WorkflowInstanceList {
+  items: WorkflowInstance[];
+  total: number;
+}
+
+export interface WorkRun {
+  organization_id: string;
+  correlation_id: string;
+  job_type: string;
+  status: string;
+  counters: Record<string, number>;
+  skips: Record<string, string>[];
+}

@@ -61,6 +61,9 @@ class AuditAction:
     ANALYTICS_RUN_SUCCEEDED = "analytics.run_succeeded"
     ANALYTICS_RUN_FAILED = "analytics.run_failed"
     ANALYTICS_RULE_UPDATED = "analytics.rule_updated"
+    WORK_STATUS_CHANGED = "work.status_changed"
+    WORK_ASSIGNED = "work.assigned"
+    WORK_CONFLICT_RESOLVED = "work.conflict_resolved"
 
 
 OUTCOME_SUCCESS = "success"

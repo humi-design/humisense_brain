@@ -348,3 +348,166 @@ def remove_layer3_rls() -> None:
     for table in LAYER3_RLS_TABLES:
         for statement in disable_policy_sql(table):
             op.execute(statement)
+
+
+# --- Layer 4 ---------------------------------------------------------------------
+
+LAYER4_RLS_TABLES: tuple[str, ...] = (
+    "departments",
+    "work_entities",
+    "work_source_references",
+    "work_assignments",
+    "work_status_history",
+    "work_priorities",
+    "work_commitments",
+    "work_commitment_history",
+    "work_dependencies",
+    "work_blockers",
+    "work_followups",
+    "workflow_definitions",
+    "workflow_instances",
+    "workflow_steps",
+    "work_timeline_events",
+    "work_conflicts",
+    "work_extractions",
+    "work_outbox_events",
+)
+"""Layer 4 tables. Applied by the Layer 4 migration so the Layer 3 revision stays
+reproducible against a database that predates Layer 4."""
+
+# The work timeline, status ledger, and commitment ledger are the audit trail of how work
+# changed. They reject UPDATE and DELETE so history cannot be rewritten to hide that a
+# deadline moved, an owner changed, or a status was reversed.
+WORK_TIMELINE_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION work_timeline_events_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'work_timeline_events is append-only; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS work_timeline_events_immutable ON work_timeline_events;",
+    """
+    CREATE TRIGGER work_timeline_events_immutable
+        BEFORE UPDATE OR DELETE ON work_timeline_events
+        FOR EACH ROW EXECUTE FUNCTION work_timeline_events_reject_mutation();
+    """,
+)
+
+DROP_WORK_TIMELINE_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS work_timeline_events_immutable ON work_timeline_events;",
+    "DROP FUNCTION IF EXISTS work_timeline_events_reject_mutation();",
+)
+
+WORK_STATUS_HISTORY_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION work_status_history_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'work_status_history is append-only; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS work_status_history_immutable ON work_status_history;",
+    """
+    CREATE TRIGGER work_status_history_immutable
+        BEFORE UPDATE OR DELETE ON work_status_history
+        FOR EACH ROW EXECUTE FUNCTION work_status_history_reject_mutation();
+    """,
+)
+
+DROP_WORK_STATUS_HISTORY_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS work_status_history_immutable ON work_status_history;",
+    "DROP FUNCTION IF EXISTS work_status_history_reject_mutation();",
+)
+
+WORK_COMMITMENT_HISTORY_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION work_commitment_history_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'work_commitment_history is append-only; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS work_commitment_history_immutable ON work_commitment_history;",
+    """
+    CREATE TRIGGER work_commitment_history_immutable
+        BEFORE UPDATE OR DELETE ON work_commitment_history
+        FOR EACH ROW EXECUTE FUNCTION work_commitment_history_reject_mutation();
+    """,
+)
+
+DROP_WORK_COMMITMENT_HISTORY_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS work_commitment_history_immutable ON work_commitment_history;",
+    "DROP FUNCTION IF EXISTS work_commitment_history_reject_mutation();",
+)
+
+# ``workflow_definitions`` are versioned, not edited: a change is a new version row. An
+# UPDATE would silently rewrite what a past workflow instance was judged against.
+WORKFLOW_DEFINITION_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION workflow_definitions_reject_mutation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'workflow_definitions is immutable; % is not permitted', TG_OP
+            USING ERRCODE = '42501';
+    END;
+    $$;
+    """,
+    "DROP TRIGGER IF EXISTS workflow_definitions_immutable ON workflow_definitions;",
+    """
+    CREATE TRIGGER workflow_definitions_immutable
+        BEFORE UPDATE OR DELETE ON workflow_definitions
+        FOR EACH ROW EXECUTE FUNCTION workflow_definitions_reject_mutation();
+    """,
+)
+
+DROP_WORKFLOW_DEFINITION_IMMUTABILITY_STATEMENTS: tuple[str, ...] = (
+    "DROP TRIGGER IF EXISTS workflow_definitions_immutable ON workflow_definitions;",
+    "DROP FUNCTION IF EXISTS workflow_definitions_reject_mutation();",
+)
+
+
+def apply_layer4_rls() -> None:
+    """Apply RLS and the immutability triggers to the Layer 4 tables.
+
+    Called from the Layer 4 Alembic migration. ``app_current_org()`` is created by the
+    Layer 1 migration; it is recreated here defensively so this migration is correct even
+    when run standalone.
+    """
+    from alembic import op
+
+    op.execute(CREATE_HELPER_FUNCTION)
+    for table in LAYER4_RLS_TABLES:
+        for statement in enable_policy_sql(table):
+            op.execute(statement)
+    for statement in WORK_TIMELINE_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in WORK_STATUS_HISTORY_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in WORK_COMMITMENT_HISTORY_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in WORKFLOW_DEFINITION_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+
+
+def remove_layer4_rls() -> None:
+    """Reverse :func:`apply_layer4_rls`."""
+    from alembic import op
+
+    for statement in DROP_WORKFLOW_DEFINITION_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in DROP_WORK_COMMITMENT_HISTORY_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in DROP_WORK_STATUS_HISTORY_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for statement in DROP_WORK_TIMELINE_IMMUTABILITY_STATEMENTS:
+        op.execute(statement)
+    for table in LAYER4_RLS_TABLES:
+        for statement in disable_policy_sql(table):
+            op.execute(statement)

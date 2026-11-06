@@ -35,6 +35,25 @@ TEST_DATABASE_URL = os.environ.get(
 TEST_MASTER_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 TABLES_IN_TRUNCATION_ORDER = (
+    # Layer 4 (children before parents)
+    "work_outbox_events",
+    "work_extractions",
+    "work_conflicts",
+    "work_timeline_events",
+    "workflow_steps",
+    "workflow_instances",
+    "workflow_definitions",
+    "work_followups",
+    "work_blockers",
+    "work_dependencies",
+    "work_commitment_history",
+    "work_commitments",
+    "work_priorities",
+    "work_status_history",
+    "work_assignments",
+    "work_source_references",
+    "work_entities",
+    "departments",
     # Layer 3 (children before parents)
     "detection_event_history",
     "detection_events",

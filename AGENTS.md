@@ -143,6 +143,43 @@ npm run typecheck && npm run lint && npm test && npm run build
   so detections are read back through the API rather than published. See
   `docs/LAYER3-ARCHITECTURE.md` §10.
 
+## Layer 4 (work intelligence engine)
+
+- Layer 4 derives work from **derivable** record types only (`layer4/policy.py`,
+  `RECORD_TYPE_WORK_TYPE` / `EXPLICIT_TASK_RECORD_TYPES`). A record type not listed derives
+  nothing — it is not a bug when an `inventory_record` or a generic CSV row produces no work.
+  Widening the set is a policy change, not a code change.
+- A record must clear three upstream gates before Layer 4 sees it: it must resolve to a
+  Layer 2 record family (`layer2/validation.py::infer_family`), have a normalizer, and be a
+  derivable work type. A benchmark fixture that skips any of the three measures the fixture,
+  not the engine (see `devtools/work_benchmark.py`).
+- Every derived value records its origin (`explicit` | `inferred` | `extracted` | `manual`)
+  and its confidence. An unresolved owner, department, or due date stays unresolved
+  (`None`) — never guessed from a name in a message.
+- Derivation is an **idempotent upsert** on a natural key, so a re-run, a backfill, or a
+  retransmit never double-counts. `tests/layer4/test_engine.py::test_rerun_is_an_idempotent_upsert`
+  is the guard.
+- The engine is **bounded** (window + row limit) and **per-record isolated**: one bad record
+  is a `skip` in `WorkRunResult`, and a run with any skip finishes `PARTIAL`, not
+  `SUCCEEDED`.
+- Layer 4 owns its own transactional outbox (`work_outbox_events`) because the Layer 2
+  outbox is keyed to a canonical record by a NOT NULL FK. Events are durable-first and
+  at-least-once; publication never writes a work entity, so it cannot create an event loop.
+- Deadlines are typed (`ABSOLUTE`, `RELATIVE`, `SOURCE_PROVIDED`, `CONTRACTUAL`,
+  `ESTIMATED`, `REQUESTED`, `RECURRING`) and a requested date is never promoted to a
+  confirmed promise. Overdue is computed from verified timestamps with no business calendar;
+  the calendar is a documented configuration hook, not an implementation.
+- A Layer 3 detection is associated with work only through a verified reference (work
+  `machine_ref` ↔ detection `entity_id`). Layer 4 never declares a root cause.
+- `layer4_sweep_enabled` defaults to `false`: scheduled derivation is opt-in. The API run
+  endpoint (`POST /api/v1/work/run`) works regardless. `layer4_sweep_window_hours` and
+  `layer4_sweep_row_limit` bound a scheduled run.
+- `uv run python -m humisense.devtools.cli work-benchmark --records N` measures derivation
+  and read-model latency against a real database. It asserts nothing; its numbers are
+  recorded in `docs/LAYER4-RELEASE.md`.
+- Layer 4 exposes **no** endpoint that sends anything to an external party. Email, message,
+  ERP write, order placement, payment, and approval are Layers 5–11.
+
 ## Conventions
 
 - Python: 3.12+, Ruff (line length and rules in `backend/pyproject.toml`), mypy strict on

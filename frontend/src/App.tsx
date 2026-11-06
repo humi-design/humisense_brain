@@ -8,12 +8,18 @@
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import {
   Activity,
+  BellRing,
   Boxes,
+  Building2,
   LayoutDashboard,
+  ListChecks,
   LogOut,
   Plug,
   ScrollText,
+  ShieldAlert,
   ShieldCheck,
+  UserCheck,
+  Workflow,
 } from "lucide-react";
 import { useSession } from "./hooks/useSession";
 import { Button, Spinner } from "./components/ui";
@@ -24,10 +30,23 @@ import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { ConnectionDetailPage } from "./pages/ConnectionDetailPage";
 import { AddConnectionPage } from "./pages/AddConnectionPage";
 import { AuditPage } from "./pages/AuditPage";
+import { MyWorkPage } from "./pages/MyWorkPage";
+import { WorkListPage } from "./pages/WorkListPage";
+import { WorkDetailPage } from "./pages/WorkDetailPage";
+import { DepartmentPage } from "./pages/DepartmentPage";
+import { FollowUpPage } from "./pages/FollowUpPage";
+import { WorkflowPage } from "./pages/WorkflowPage";
+import { ExecutivePage } from "./pages/ExecutivePage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 const NAV = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true, permission: null },
+  { to: "/my-work", label: "My work", icon: UserCheck, end: false, permission: "work:read" },
+  { to: "/work", label: "Work", icon: ListChecks, end: false, permission: "work:read" },
+  { to: "/departments", label: "Departments", icon: Building2, end: false, permission: "work:read" },
+  { to: "/follow-ups", label: "Follow-ups", icon: BellRing, end: false, permission: "work:read" },
+  { to: "/workflows", label: "Workflows", icon: Workflow, end: false, permission: "work:read" },
+  { to: "/executive", label: "Executive", icon: ShieldAlert, end: false, permission: "work:read" },
   { to: "/catalog", label: "Connector catalog", icon: Boxes, end: false, permission: "connectors:read" },
   { to: "/connections", label: "Connections", icon: Plug, end: false, permission: "connections:read" },
   { to: "/audit", label: "Audit trail", icon: ScrollText, end: false, permission: "audit:read" },
@@ -166,6 +185,62 @@ export function App() {
               <RequireAuth>
                 <OverviewPage />
               </RequireAuth>
+            }
+          />
+          <Route
+            path="/my-work"
+            element={
+              <RequirePermission permission="work:read">
+                <MyWorkPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/work"
+            element={
+              <RequirePermission permission="work:read">
+                <WorkListPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/work/:workId"
+            element={
+              <RequirePermission permission="work:read">
+                <WorkDetailPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/departments"
+            element={
+              <RequirePermission permission="work:read">
+                <DepartmentPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/follow-ups"
+            element={
+              <RequirePermission permission="work:read">
+                <FollowUpPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/workflows"
+            element={
+              <RequirePermission permission="work:read">
+                <WorkflowPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="/executive"
+            element={
+              <RequirePermission permission="work:read">
+                <ExecutivePage />
+              </RequirePermission>
             }
           />
           <Route

@@ -344,3 +344,112 @@ class Metrics:
 
     def layer3_baseline_drift_blocked(self) -> None:
         L3_BASELINE_DRIFT_BLOCKED.inc()
+
+
+# --- Layer 4 ---------------------------------------------------------------------
+
+L4_RUNS_STARTED = Counter(
+    "humisense_layer4_runs_started_total",
+    "Work derivation runs started, by job type.",
+    labelnames=("job_type",),
+)
+
+L4_RUNS_FINISHED = Counter(
+    "humisense_layer4_runs_finished_total",
+    "Work derivation runs finished, by job type and status.",
+    labelnames=("job_type", "status"),
+)
+
+L4_RUN_DURATION = Histogram(
+    "humisense_layer4_run_duration_seconds",
+    "Wall-clock duration of a work derivation run.",
+    labelnames=("job_type",),
+    buckets=(0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60, 300),
+)
+
+L4_WORK_CREATED = Counter(
+    "humisense_layer4_work_created_total",
+    "Work entities created.",
+)
+
+L4_WORK_UPDATED = Counter(
+    "humisense_layer4_work_updated_total",
+    "Work entities updated.",
+)
+
+L4_SKIPS = Counter(
+    "humisense_layer4_skips_total",
+    "Source records skipped before derivation, by stage and reason.",
+    labelnames=("stage", "reason"),
+)
+
+L4_EVENTS_ENQUEUED = Counter(
+    "humisense_layer4_events_enqueued_total",
+    "Layer 4 outbox events enqueued, by event type.",
+    labelnames=("event_type",),
+)
+
+L4_OUTBOX_PENDING = Gauge(
+    "humisense_layer4_outbox_pending",
+    "Work outbox events awaiting publication.",
+)
+
+L4_OUTBOX_PUBLISHED = Counter(
+    "humisense_layer4_outbox_published_total",
+    "Work outbox events published downstream.",
+)
+
+L4_OUTBOX_FAILED = Counter(
+    "humisense_layer4_outbox_failed_total",
+    "Work outbox events that failed to publish.",
+)
+
+L4_CONFLICTS_DETECTED = Counter(
+    "humisense_layer4_conflicts_detected_total",
+    "Work conflicts detected, by conflict type.",
+    labelnames=("conflict_type",),
+)
+
+
+class WorkMetrics:
+    """Layer 4 metric emitters, kept separate from the Layer 1-3 facade.
+
+    Tenant identifiers are never label values, matching the platform rule: a metric label is
+    an unbounded-cardinality hazard and a data-exposure surface.
+    """
+
+    def __init__(self, registry: CollectorRegistry | None = None) -> None:
+        self._registry = registry
+
+    def layer4_run_started(self, *, job_type: str) -> None:
+        L4_RUNS_STARTED.labels(job_type=job_type).inc()
+
+    def layer4_run_finished(self, *, job_type: str, status: str, duration_seconds: float) -> None:
+        L4_RUNS_FINISHED.labels(job_type=job_type, status=status).inc()
+        L4_RUN_DURATION.labels(job_type=job_type).observe(duration_seconds)
+
+    def layer4_work_created(self, *, count: int = 1) -> None:
+        if count:
+            L4_WORK_CREATED.inc(count)
+
+    def layer4_work_updated(self, *, count: int = 1) -> None:
+        if count:
+            L4_WORK_UPDATED.inc(count)
+
+    def layer4_skip(self, *, stage: str, reason: str) -> None:
+        L4_SKIPS.labels(stage=stage, reason=reason).inc()
+
+    def layer4_event_enqueued(self, *, event_type: str) -> None:
+        L4_EVENTS_ENQUEUED.labels(event_type=event_type).inc()
+
+    def layer4_outbox_pending(self, *, value: float) -> None:
+        L4_OUTBOX_PENDING.set(value)
+
+    def layer4_outbox_published(self) -> None:
+        L4_OUTBOX_PUBLISHED.inc()
+
+    def layer4_outbox_failed(self) -> None:
+        L4_OUTBOX_FAILED.inc()
+
+    def layer4_conflict_detected(self, *, conflict_type: str) -> None:
+        L4_CONFLICTS_DETECTED.labels(conflict_type=conflict_type).inc()

@@ -143,6 +143,29 @@ async def analytics_sweep_task(ctx: dict[str, Any]) -> dict[str, int]:
     return {"tenants": len(results), "detections": detections, "skipped": skipped}
 
 
+async def work_sweep_task(ctx: dict[str, Any]) -> dict[str, int]:
+    """Periodic Layer 4 sweep: derive work for every tenant.
+
+    Disabled unless ``layer4_sweep_enabled`` is set, so a deployment that has not sized its
+    windows does not derive work on a timer it did not ask for. Each tenant is run inside its
+    own tenant-scoped sessions, so the sweep cannot cross a tenant boundary, and one tenant's
+    failure does not stop the sweep.
+    """
+    container = ctx["container"]
+    if not container.settings.layer4_sweep_enabled:
+        return {"tenants": 0, "work_created": 0, "skips": 0}
+    results = await container.layer4_engine.run_sweep(correlation_id="layer4-sweep")
+    created = sum(r.work_created for r in results)
+    skips = sum(len(r.skips) for r in results)
+    logger.info(
+        "layer4_sweep_finished",
+        tenants=len(results),
+        work_created=created,
+        skips=skips,
+    )
+    return {"tenants": len(results), "work_created": created, "skips": skips}
+
+
 class WorkerSettings:
     """arq worker configuration.
 
@@ -160,6 +183,7 @@ class WorkerSettings:
         reap_stale_jobs_task,
         publish_outbox_task,
         analytics_sweep_task,
+        work_sweep_task,
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -181,4 +205,6 @@ class WorkerSettings:
         # The analytics sweep is a no-op unless enabled, so the schedule exists without
         # imposing detection on a deployment that has not configured it.
         cron(analytics_sweep_task, minute={5, 35}, run_at_startup=False),
+        # The work derivation sweep is likewise a no-op unless enabled.
+        cron(work_sweep_task, minute={15, 45}, run_at_startup=False),
     ]

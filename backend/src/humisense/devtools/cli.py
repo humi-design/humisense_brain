@@ -311,6 +311,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark.add_argument("--records", type=int, default=5000)
     benchmark.add_argument("--batch-size", type=int, default=500)
+    work_benchmark = sub.add_parser(
+        "work-benchmark",
+        help="measure Layer 4 work derivation and read-model latency",
+    )
+    work_benchmark.add_argument("--records", type=int, default=5000)
     return parser
 
 
@@ -328,6 +333,11 @@ def main(argv: list[str] | None = None) -> int:
                 command_benchmark(settings, records=args.records, batch_size=args.batch_size)
             )
         )
+
+    if args.command == "work-benchmark":
+        from humisense.devtools.work_benchmark import command_work_benchmark
+
+        return int(asyncio.run(command_work_benchmark(settings, records=args.records)))
 
     handlers: dict[str, Any] = {
         "seed": command_seed,

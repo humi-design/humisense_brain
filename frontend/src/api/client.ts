@@ -15,6 +15,9 @@
 import { z } from "zod";
 import type {
   AuditEventList,
+  BlockerList,
+  CommitmentList,
+  ConflictList,
   Connection,
   ConnectionList,
   ConnectionCreateRequest,
@@ -22,25 +25,48 @@ import type {
   ConnectionTestResult,
   Connector,
   CurrentUser,
+  DepartmentList,
+  DepartmentOverview,
+  DependencyList,
+  ExecutiveOverview,
+  FollowUpList,
+  MyWork,
   Overview,
   SourceRecordList,
   SyncAccepted,
   SyncJob,
   SyncJobList,
+  WorkDetail,
+  WorkList,
+  WorkRun,
+  WorkflowInstanceList,
 } from "./types";
 import {
   auditEventListSchema,
+  blockerListSchema,
+  commitmentListSchema,
+  conflictListSchema,
   connectionListSchema,
   connectionSchema,
   connectionStatusSchema,
   connectionTestResultSchema,
   connectorListSchema,
   currentUserSchema,
+  departmentListSchema,
+  departmentOverviewSchema,
+  dependencyListSchema,
+  executiveOverviewSchema,
+  followUpListSchema,
+  myWorkSchema,
   overviewSchema,
   sourceRecordListSchema,
   syncAcceptedSchema,
   syncJobListSchema,
   syncJobSchema,
+  workDetailSchema,
+  workListSchema,
+  workRunSchema,
+  workflowInstanceListSchema,
 } from "./schemas";
 
 const API_PREFIX = "/api/v1";
@@ -358,6 +384,175 @@ export const api = {
     return request("/audit-events", auditEventListSchema, {
       query: { limit: params.limit, offset: params.offset },
       ...(signal ? { signal } : {}),
+    });
+  },
+
+  // --- Layer 4: work intelligence -----------------------------------------------
+
+  async work(
+    params: {
+      limit?: number | undefined;
+      offset?: number | undefined;
+      status?: string | undefined;
+      work_type?: string | undefined;
+      domain?: string | undefined;
+      department_id?: string | undefined;
+      owner_id?: string | undefined;
+      due_before?: string | undefined;
+      due_after?: string | undefined;
+      search?: string | undefined;
+    } = {},
+    signal?: AbortSignal,
+  ): Promise<WorkList> {
+    return request("/work", workListSchema, {
+      query: {
+        limit: params.limit,
+        offset: params.offset,
+        status: params.status,
+        work_type: params.work_type,
+        domain: params.domain,
+        department_id: params.department_id,
+        owner_id: params.owner_id,
+        due_before: params.due_before,
+        due_after: params.due_after,
+        search: params.search,
+      },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async workItem(workId: string, signal?: AbortSignal): Promise<WorkDetail> {
+    return request(`/work/${encodeURIComponent(workId)}`, workDetailSchema, {
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async myWork(asOf?: string, signal?: AbortSignal): Promise<MyWork> {
+    return request("/work/my-work", myWorkSchema, {
+      query: { as_of: asOf },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async departments(signal?: AbortSignal): Promise<DepartmentList> {
+    return request("/work/departments", departmentListSchema, signal ? { signal } : {});
+  },
+
+  async departmentOverview(
+    departmentId: string,
+    asOf?: string,
+    signal?: AbortSignal,
+  ): Promise<DepartmentOverview> {
+    return request(
+      `/work/departments/${encodeURIComponent(departmentId)}/overview`,
+      departmentOverviewSchema,
+      { query: { as_of: asOf }, ...(signal ? { signal } : {}) },
+    );
+  },
+
+  async executiveOverview(asOf?: string, signal?: AbortSignal): Promise<ExecutiveOverview> {
+    return request("/work/executive-overview", executiveOverviewSchema, {
+      query: { as_of: asOf },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async commitments(
+    params: { limit?: number; offset?: number; work_id?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<CommitmentList> {
+    return request("/work/commitments", commitmentListSchema, {
+      query: { limit: params.limit, offset: params.offset, work_id: params.work_id },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async dependencies(
+    params: { limit?: number; offset?: number; work_id?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<DependencyList> {
+    return request("/work/dependencies", dependencyListSchema, {
+      query: { limit: params.limit, offset: params.offset, work_id: params.work_id },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async blockers(
+    params: { limit?: number; offset?: number; work_id?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<BlockerList> {
+    return request("/work/blockers", blockerListSchema, {
+      query: { limit: params.limit, offset: params.offset, work_id: params.work_id },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async followUps(
+    params: { limit?: number; offset?: number; work_id?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<FollowUpList> {
+    return request("/work/followups", followUpListSchema, {
+      query: { limit: params.limit, offset: params.offset, work_id: params.work_id },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async conflicts(
+    params: { limit?: number; offset?: number; status?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<ConflictList> {
+    return request("/work/conflicts", conflictListSchema, {
+      query: { limit: params.limit, offset: params.offset, status: params.status },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async resolveConflict(
+    conflictId: string,
+    payload: { resolved_value?: Record<string, unknown> | null; resolution_note?: string | null },
+  ): Promise<void> {
+    return request(
+      `/work/conflicts/${encodeURIComponent(conflictId)}/resolve`,
+      z.void(),
+      { method: "POST", body: payload },
+    );
+  },
+
+  async workflows(
+    params: { limit?: number; offset?: number; work_id?: string } = {},
+    signal?: AbortSignal,
+  ): Promise<WorkflowInstanceList> {
+    return request("/work/workflows", workflowInstanceListSchema, {
+      query: { limit: params.limit, offset: params.offset, work_id: params.work_id },
+      ...(signal ? { signal } : {}),
+    });
+  },
+
+  async runWork(payload: {
+    since?: string | null;
+    until?: string | null;
+    row_limit?: number;
+  }): Promise<WorkRun> {
+    return request("/work/run", workRunSchema, { method: "POST", body: payload });
+  },
+
+  async updateWorkStatus(
+    workId: string,
+    payload: { status: string; reason?: string | null },
+  ): Promise<void> {
+    return request(`/work/${encodeURIComponent(workId)}/status`, z.void(), {
+      method: "POST",
+      body: payload,
+    });
+  },
+
+  async assignWork(
+    workId: string,
+    payload: { user_id?: string | null; department_id?: string | null; role?: string },
+  ): Promise<void> {
+    return request(`/work/${encodeURIComponent(workId)}/assign`, z.void(), {
+      method: "POST",
+      body: payload,
     });
   },
 };

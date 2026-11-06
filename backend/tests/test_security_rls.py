@@ -250,6 +250,7 @@ async def test_every_tenant_table_is_either_rls_scoped_or_auth_scoped() -> None:
         set(rls_module.RLS_TABLES)
         | set(rls_module.LAYER2_RLS_TABLES)
         | set(rls_module.LAYER3_RLS_TABLES)
+        | set(rls_module.LAYER4_RLS_TABLES)
     )
     unprotected = tenant_tables - rls_scoped - AUTH_SCOPE_TABLES
     assert unprotected == set(), f"tables with no isolation mechanism: {sorted(unprotected)}"
